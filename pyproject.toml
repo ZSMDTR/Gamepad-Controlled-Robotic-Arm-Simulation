@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arm-teleop-sdls"
+version = "0.1.0"
+description = "Gamepad-driven Cartesian arm teleoperation with DLS and SDLS kinematic simulation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24,<3"]
+
+[project.scripts]
+arm-teleop = "arm_teleop.server:main"
+
+[tool.setuptools.packages.find]
+include = ["arm_teleop*"]
+
+[tool.setuptools.package-data]
+arm_teleop = ["static/*.html", "static/*.js", "static/*.css"]

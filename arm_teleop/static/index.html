@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Arm Teleop Lab · SDLS 运动学实验室</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><div><h1>Arm Teleop Lab <span>/ SDLS</span></h1><p>末端位置遥操作 · 六关节运动学实验</p></div></div>
+      <div class="header-status"><span class="status-pill" id="server-status"><span class="status-dot"></span><span id="server-status-text">连接仿真中</span></span><span class="version">PROTOTYPE 01</span></div>
+    </header>
+
+    <main class="workspace">
+      <section class="scene-panel" aria-label="机械臂三维仿真">
+        <div class="scene-heading"><div><span class="eyebrow">WORKSPACE</span><h2>让末端带动整条机械臂</h2></div><button type="button" class="icon-button" id="reset-view" aria-label="恢复默认视角" title="恢复默认视角">↺ <span>视角</span></button></div>
+        <div class="scene-stage" id="scene-stage">
+          <canvas id="robot-canvas" tabindex="0" aria-label="六关节机械臂三维投影，拖动旋转视角，滚轮缩放">浏览器需要支持 Canvas 以显示机械臂。</canvas>
+          <div class="scene-mode"><span class="live-dot" id="motion-dot"></span><span id="motion-status">等待仿真</span></div>
+          <div class="scene-hint">拖动旋转 · 滚轮缩放</div>
+          <div class="coordinates"><span class="eyebrow">目标位置 <span class="unit">m</span></span><div><span>X <strong id="target-x">—</strong></span><span>Y <strong id="target-y">—</strong></span><span>Z <strong id="target-z">—</strong></span></div></div>
+          <div class="scene-legend"><span><i class="legend-tcp"></i>实际 TCP</span><span><i class="legend-target"></i>目标点</span></div>
+          <div class="loading-overlay" id="loading-overlay"><span class="loader" aria-hidden="true"></span><strong id="loading-title">正在连接本地仿真</strong><p id="loading-detail">机械臂状态将在连接后显示</p></div>
+        </div>
+        <div class="metrics" aria-label="实时求解指标">
+          <div class="metric"><span>末端误差</span><strong id="error-value">—</strong><small>mm</small></div>
+          <div class="metric"><span>上次运动计算</span><strong id="solve-value">—</strong><small>ms / 步</small></div>
+          <div class="metric"><span>最小奇异值</span><strong id="sigma-value">—</strong><small>σ min · m/rad</small></div>
+        </div>
+        <div class="joint-strip" id="joint-strip" aria-label="六个关节的当前角度"></div>
+      </section>
+
+      <aside class="control-panel" aria-label="仿真控制">
+        <section class="control-card solver-card">
+          <div class="card-heading"><span class="section-number">01</span><h2>运动求解</h2><span class="tiny-label">XYZ ONLY</span></div>
+          <div class="segmented" role="group" aria-label="选择逆运动学算法"><button type="button" data-method="sdls" class="selected" aria-pressed="true">SDLS <span>选择性阻尼</span></button><button type="button" data-method="dls" aria-pressed="false">DLS <span>统一阻尼</span></button></div>
+          <p class="explanation" id="method-description">按奇异方向分别限制关节增量，观察接近奇异位形时的跟踪表现。</p>
+          <div class="slider-heading"><label for="elbow-weight">肘部姿态偏好</label><output for="elbow-weight" id="elbow-output">0.35</output></div>
+          <input type="range" id="elbow-weight" min="0" max="1" step="0.05" value="0.35" aria-describedby="elbow-help">
+          <div class="range-labels"><span>关闭</span><span>更强</span></div>
+          <p class="small-note" id="elbow-help">调节零空间姿态偏好的权重；无法指定任意肘部轨迹。</p>
+        </section>
+
+        <section class="control-card input-card">
+          <div class="card-heading"><span class="section-number">02</span><h2>操控输入</h2><span class="input-badge" id="input-badge">键盘</span></div>
+          <div class="device-state"><span class="device-icon" aria-hidden="true">⌘</span><div><strong id="device-name">未检测到手柄</strong><p id="device-detail">连接后按任意键唤醒手柄</p></div></div>
+          <div class="mapping-row"><span>左摇杆</span><strong>X / Y 平移</strong></div><div class="mapping-row"><span>右摇杆 ↑↓</span><strong>Z 升降</strong></div>
+          <div class="enable-callout"><kbd>LB</kbd><span>按住使能，松开停止运动</span></div>
+          <div class="keyboard-help"><span>无手柄时</span><div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>平移</span><kbd>Q</kbd><kbd>E</kbd><span>升降</span></div><div><kbd>Space</kbd><span>按住使能 · Q 升 / E 降</span></div></div>
+          <p class="small-note">坐标系固定在机械臂基座。切换窗口或断开手柄会停止输入。</p>
+        </section>
+
+        <section class="control-card run-card">
+          <div class="card-heading"><span class="section-number">03</span><h2>运行状态</h2></div>
+          <div class="run-message" id="run-message" role="status"><span class="status-dot"></span><span id="run-message-text">等待仿真连接</span></div>
+          <p id="constraint-message" class="small-note constraint-message">使用关节限位与速度限制，目标超前距离受限。</p>
+          <button type="button" class="reset-button" id="reset-arm"><span aria-hidden="true">↺</span> 复位机械臂与目标</button>
+          <p id="action-message" class="action-message" role="status"></p>
+        </section>
+      </aside>
+    </main>
+    <footer class="footer"><span><i aria-hidden="true"></i> 运动学仿真 · 不连接或驱动实物</span><span>控制位置，不控制夹爪开合 <span class="footer-divider">/</span> 不包含接触与力学建模</span></footer>
+  </div>
+</body>
+</html>
