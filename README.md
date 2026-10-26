@@ -19,7 +19,7 @@ python -m pip install -e .
 python -m arm_teleop
 ```
 
-打开 **http://127.0.0.1:8000**。端口被占用时：`python -m arm_teleop --port 8001`。
+打开 [本地仿真页面](http://127.0.0.1:8000)。端口被占用时：`python -m arm_teleop --port 8001`。
 
 ## 操作
 
