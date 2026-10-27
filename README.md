@@ -1,102 +1,83 @@
-# Gamepad-Controlled Robotic Arm Simulation
+# 手柄控制机械臂 · MuJoCo 算法实验
 
-用普通手柄控制末端 **XYZ 位置**，通过 SDLS / DLS 逆运动学计算六个关节的动作。
-
-第一版是本地运动学实验台：Python + NumPy 求解，浏览器显示三维机械臂并读取手柄。没有云端服务、前端 CDN 或机械臂驱动。
+使用普通手柄控制夹爪末端的 **平移、转动和开合**；控制器计算关节参考，MuJoCo 模拟关节执行器与动力学。网页显示来自仿真的实际状态。此项目为实验原型，不连接真实机械臂。
 
 ## 快速开始
 
-需要 Python 3.10+ 和支持 Gamepad API 的现代浏览器，建议 Chrome / Edge。
+需要 Python 3.10+、MuJoCo 支持的系统，以及支持 Gamepad API 的桌面浏览器。模型随仓库提供。
 
 ```bash
 git clone https://github.com/ZSMDTR/Gamepad-Controlled-Robotic-Arm-Simulation.git
 cd Gamepad-Controlled-Robotic-Arm-Simulation
 python -m venv .venv
-# macOS / Linux
+# Linux / macOS:
 source .venv/bin/activate
 # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -e .
 python -m arm_teleop
 ```
 
-打开 [本地仿真页面](http://127.0.0.1:8000)。端口被占用时：`python -m arm_teleop --port 8001`。
+打开 [本地仿真页面](http://127.0.0.1:8000)，连接手柄并按任意键使浏览器识别。端口占用时可运行 `python -m arm_teleop --port 8001`。请在桌面浏览器点击页面，使其获得焦点。
 
-## 操作
+## 操作方法
 
-| 输入 | 动作 |
+| 控制 | 功能 |
 | --- | --- |
-| 左摇杆左右 / 上下 | 基座坐标系 X / Y 平移 |
-| 右摇杆上下 | Z 升降 |
-| 按住 LB | 使能手柄运动；松开立即暂停仿真 |
-| WASD / QE | 无标准手柄时，键盘 XY / Z；Q 升、E 降 |
-| 按住空格 | 使能键盘运动 |
-| 拖动画面 / 滚轮 | 旋转视角 / 缩放 |
-| DLS / SDLS、姿态滑块 | 比较求解方法及姿态偏好强度 |
+| 按住 LB | 使能运动和夹爪；松开后减速并保持 |
+| 左摇杆 | 默认模式下控制末端 X / Y 平移 |
+| 右摇杆上下 | 默认模式下控制 Z 上升 / 下降 |
+| 按住 RB | 切换到转动模式：左摇杆和右摇杆左右控制三个转动方向 |
+| A / B | 夹爪打开 / 闭合；两键同时按下互相抵消 |
+| 方向模式切换 | 松开摇杆回到中间后才启用新方向，避免轴含义突变 |
+| 键盘备用 | 按住空格使能；WASD 和 Q/E 平移；I/K、J/L、U/O 转动；Z/X 开合 |
 
-先点击机械臂画面使页面获得焦点。手柄可能需要按一次实体按键才被浏览器识别。使用浏览器 `standard` 映射；非标准手柄提示后回退键盘。标准手柄连接时优先使用手柄。
+手柄首次接入、页面失焦或断开后，请先松开 LB、让摇杆回中，再按 LB 继续。此版本只自动识别浏览器 `standard` 映射；不受支持的手柄可使用键盘备用。设备、浏览器和系统的具体组合需要实测。
 
-切出窗口、手柄断开或指令超过 250 ms 未更新会停止输入。摇杆回中时冻结关节并重置目标，防止松手后继续追赶积累误差。实体手柄尚需按设备验证；网页和键盘路径可先独立运行。
+页面可选 **UR5e** 或 **Panda**，以及三种算法：
 
-## 算法结构
+- **DLS**：默认，统一求解位置与朝向。
+- **位置优先**：先求位置，再在数值零空间中尽量求朝向；后续关节裁剪可能改变严格优先关系。
+- **姿态扩展 SDLS（实验）**：将原位置 SDLS 的分方向限幅启发式扩展到尺度化位姿任务；这不是论文原版姿态算法，也不保证比 DLS 更好。
+
+## 控制链路
 
 ```mermaid
 flowchart LR
-    A[手柄或键盘] --> B[死区与 XYZ 速度映射]
-    B --> C[积分目标及超前限幅]
-    C --> D[SDLS / DLS]
-    F[关节反馈与 FK / 位置雅可比] --> D
-    D --> E[零空间姿态偏好]
-    E --> G[速度、加速度与关节限位]
-    G --> H[运动学仿真]
-    H --> F
+    A[手柄平移与转动] --> B[位置 / 朝向目标与限幅]
+    B --> C[位姿逆运动学与姿态偏好]
+    C --> D[关节参考和限幅]
+    D --> E[MuJoCo 位置伺服]
+    E --> F[动力学步进]
+    F --> G[实际关节角 / 速度 / TCP / 雅可比]
+    G --> C
+    H[开合指令] --> E
 ```
 
-- 默认六旋转关节通用模型，长度单位 m、角度 rad，默认控制周期 10 ms。它不代表任何具体商品机械臂。
-- 每周期只计算一次 3×6 雅可比的 SVD，并在求解、姿态投影和奇异性指标之间复用。
-- SDLS 实现 Buss / Kim 论文公式 (3)、(4) 的单 TCP 旋转关节版本；采用论文的硬限幅，而非作者下载示例中的平滑缩放。
-- 目标超前距离固定限制为 0.06 m，是本原型的工程选择，未完整复现论文的自适应目标距离策略。
-- DLS 使用统一阻尼 λ=0.04 m/rad 作基线；并非论文全部实验的复现。
-- 肘部滑块调节靠近初始姿态的零空间偏好，不是任意肘部位置/轨迹控制器。末端朝向不约束，夹爪不执行开合。
+固定仿真控制周期为 10 ms，物理步长 2 ms（每次控制更新 5 个物理步）。Python 循环是软实时调度，不能保证 100 Hz；网页测得的计算时间不等于手柄到夹爪的总延迟。250 ms 无输入后控制器进入减速保持；重新使能需先松开 LB。
 
-详见 [算法说明](docs/algorithm.md) 与 [验证记录](docs/validation.md)。
+TCP 的位置与朝向，以及关节状态从 MuJoCo 读取。页面绘制的是根据仿真关节点和 TCP 生成的**简化示意图**，不是 MuJoCo 网格渲染。UR5e 上的平行夹爪为演示模型；Panda 使用其模型中的夹爪。两个模型的来源、修订号及许可证分别保存在 `robot_models/ur5e/` 和 `robot_models/panda/`。
 
-## 测试与性能对比
+## 测试
 
 ```bash
 python -m unittest discover -s tests -v
-python scripts/benchmark.py --steps 2000
-python scripts/benchmark.py --steps 2000 --json
+# 可选：使用 Node.js 验证标准手柄映射及模式切换
+node tests/test_gamepad.cjs
 ```
 
-测试覆盖数值雅可比、DLS 手算结果、SDLS 奇异性、姿态投影、连续输入约束、松手暂停、输入校验、超时及 HTTP 接口。benchmark 使用相同确定性输入，输出均值、99 分位、最大耗时和位置误差；误差参照**受限目标**。
+测试涵盖六维位姿控制、雅可比有限差分、两种 MuJoCo 机械臂的平移/转动/夹爪物理步进、输入超时和旧位置算法。标准手柄映射测试使用模拟输入；实体手柄需在目标浏览器中另行验证。
 
-## 当前边界
+## 已知边界
 
-1. **运动学仿真**：没有动力学、摩擦、碰撞检测、接触力、关节驱动器或 sim-to-real 标定。
-2. **局部求解**：无法保证绕障、全局可达或到达所有目标；不可达输入会触发目标限幅。
-3. **软实时循环**：100 Hz 是调度目标，Python、浏览器与系统调度不提供硬实时保证；页面耗时也不是端到端延迟。
-4. **暂停与硬限位例外**：连续运动有速度/加速度限制；立即暂停及最终硬限位可能打断加速度连续性。这是仿真语义，不能直接用作真实制动控制。
-5. **层级约束近似**：零空间项只保证线性化时的末端解耦；后续逐关节限幅会改变任务方向和优先级。严格约束应升级为 QP。
+- 当前只有机械臂和夹爪，没有桌面或抓取物体，无法评价抓取成功率和环境避碰。
+- 模型参数与位置伺服会产生静止跟踪偏差；仿真没有经过实机系统辨识，也未验证真实机械臂。
+- 参考速度和加速度限幅不能直接保证真实或仿真关节的实际运动完全满足限值；关节约束冲突可能需要更严格的优化器。
+- 肘部滑块调节初始关节姿态偏好，不是显式的肘部空间轨迹规划。六轴完整位姿控制通常没有额外连续自由度任意调整肘部。
+- 姿态扩展 SDLS 的位置/角度尺度和目标权重是实验参数，需要同一场景下对比。
+- 仿真夹爪无末端力传感器；开合位置不表明物体是否被夹牢，不能推断实机夹持力。
 
-下一阶段应先指定真实机械臂型号/URDF、关节约束与反馈接口，再引入碰撞与动力学验证，随后才增加低速硬件适配。
+算法细节见 [位姿控制说明](docs/pose-control.md)，第一版位置控制说明保留在 [原算法记录](docs/algorithm.md)。
 
-## 项目结构
+## 模型来源
 
-```text
-arm_teleop/
-  kinematics.py     # 六关节几何、FK、位置雅可比
-  solvers.py        # DLS、SDLS、数值零空间投影
-  controller.py     # 目标、姿态、限幅与仿真状态
-  server.py         # 本地网页/API、100 Hz 调度、指令超时
-  static/           # 中文界面、Canvas、Gamepad API
-tests/              # 数值及接口验证
-scripts/benchmark.py
-docs/
-```
-
-## 参考
-
-- Buss, S. R. & Kim, J.-S. (2005), *Selectively Damped Least Squares for Inverse Kinematics*, Journal of Graphics Tools 10(3), 37–49. [作者页面及原文](https://mathweb.ucsd.edu/~sbuss/ResearchWeb/ikmethods/) · [DOI](https://doi.org/10.1080/2151237X.2005.10129202)
-- Lynch & Park, *Modern Robotics*, [奇异性与雅可比](https://modernrobotics.northwestern.edu/nu-gm-book-resource/5-3-singularities/)
-
-实现为独立编写，仓库不包含论文全文或作者的 C++ 源码。
+模型由 Google DeepMind 的 [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) 简化而来；UR5e 模型为 BSD-3-Clause，Panda 模型为 Apache-2.0，详见各模型目录的许可证和 `SOURCE.txt`。

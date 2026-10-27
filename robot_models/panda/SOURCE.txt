@@ -1,0 +1,2 @@
+Derived from MuJoCo Menagerie, commit f3b6013629c7b94f8ee93fd977b161fa8350f9bc, franka_emika_panda.
+Visual meshes removed for compact browser rendering; collision geometry retained. TCP site and 2 ms timestep added.

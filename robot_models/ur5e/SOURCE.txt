@@ -1,0 +1,3 @@
+Derived from MuJoCo Menagerie, commit f3b6013629c7b94f8ee93fd977b161fa8350f9bc, universal_robots_ur5e.
+Visual meshes removed for compact browser rendering; collision geometry retained. TCP site and 2 ms timestep added.
+A simple demonstrator parallel gripper, not a manufacturer model, was added.

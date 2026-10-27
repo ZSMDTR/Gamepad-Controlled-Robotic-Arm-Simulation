@@ -7,22 +7,34 @@
   const state = {
     robot: null, connected: false, lastReceived: 0,
     focused: document.hasFocus() && !document.hidden,
-    keys: new Set(), gamepad: null, method: "sdls", elbowWeight: 0.35,
+    keys: new Set(), gamepad: null, method: "dls", elbowWeight: 0.35, robotId: "ur5e",
+    inputMode: null, modeLocked: true, activePadId: null, needsRelease: true, configWaiters: [],
     camera: { yaw: -0.7, pitch: 0.47, zoom: 1 },
     inputEpoch: 0, inputController: null, inputTimer: null,
     configRunning: false, configPending: null, configDirty: false,
     resetting: false, width: 1, height: 1, drawNeeded: true,
   };
-  const keyCodes = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "Space"]);
+  const keyCodes = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyI", "KeyK", "KeyJ", "KeyL", "KeyU", "KeyO", "KeyZ", "KeyX", "Space"]);
   const fmt = (v, digits = 2) => Number.isFinite(v) ? v.toFixed(digits) : "—";
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  for (let i = 0; i < 6; i++) {
-    const item = document.createElement("div");
-    item.className = "joint-item";
-    item.innerHTML = `<span>J${i + 1}</span><strong id="joint-${i}">—</strong>`;
-    $("joint-strip").appendChild(item);
+  function updateJoints(joints) {
+    if (!Array.isArray(joints)) return;
+    const strip = $("joint-strip");
+    if (strip.children.length !== joints.length) {
+      strip.replaceChildren();
+      strip.style.gridTemplateColumns = `repeat(${Math.max(1, joints.length)}, minmax(0,1fr))`;
+      joints.forEach((_, i) => {
+        const item = document.createElement("div");
+        item.className = "joint-item";
+        item.innerHTML = `<span>J${i + 1}</span><strong>—</strong>`;
+        strip.appendChild(item);
+      });
+    }
+    joints.forEach((joint, i) => {
+      strip.children[i].querySelector("strong").textContent = Number.isFinite(joint) ? `${(joint * 180 / Math.PI).toFixed(1)}°` : "—";
+    });
   }
 
   async function request(path, data, { signal, keepalive = false } = {}) {
@@ -48,17 +60,37 @@
     const safe = state.focused && !document.hidden && state.connected && !state.resetting;
     if (pad && pad.mapping === "standard") {
       const axis = (n) => {
-        const value = pad.axes[n] || 0;
+        const value = clamp(Number(pad.axes[n]) || 0, -1, 1);
         const deadzone = 0.12;
-        return Math.abs(value) < deadzone ? 0 : Math.sign(value) * (Math.abs(value) - deadzone) / (1 - deadzone);
+        return Math.abs(value) <= deadzone ? 0 : Math.sign(value) * (Math.abs(value) - deadzone) / (1 - deadzone);
       };
-      return { direction: [axis(0), -axis(1), -axis(3)], enabled: !!(safe && pad.buttons[4]?.pressed) };
+      const mode = pad.buttons[5]?.pressed ? "rotation" : "translation";
+      const padId = `${pad.index}:${pad.id}`;
+      if (state.inputMode !== mode || state.activePadId !== padId) {
+        state.modeLocked = true;
+        state.inputMode = mode;
+        state.activePadId = padId;
+      }
+      // Require all sticks to be neutral once on every mode change, reconnect, or focus loss.
+      if (state.modeLocked && [0, 1, 2, 3].every((i) => axis(i) === 0)) state.modeLocked = false;
+      if (!pad.buttons[4]?.pressed) state.needsRelease = false;
+      const enabled = !!(safe && !state.needsRelease && pad.buttons[4]?.pressed);
+      const direction = mode === "translation" && !state.modeLocked ? [axis(0), -axis(1), -axis(3)] : [0, 0, 0];
+      const rotation = mode === "rotation" && !state.modeLocked ? [-axis(1), axis(0), axis(2)] : [0, 0, 0];
+      const gripper = Number(!!pad.buttons[0]?.pressed) - Number(!!pad.buttons[1]?.pressed);
+      return enabled ? { direction, rotation, gripper, enabled } : { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false };
     }
+    state.activePadId = null;
+    state.inputMode = "keyboard";
     const keys = state.keys;
     const direction = [Number(keys.has("KeyD")) - Number(keys.has("KeyA")), Number(keys.has("KeyW")) - Number(keys.has("KeyS")), Number(keys.has("KeyQ")) - Number(keys.has("KeyE"))];
-    const length = Math.hypot(...direction);
-    if (length > 1) for (let i = 0; i < 3; i++) direction[i] /= length;
-    return { direction, enabled: !!(safe && keys.has("Space")) };
+    const rotation = [Number(keys.has("KeyI")) - Number(keys.has("KeyK")), Number(keys.has("KeyL")) - Number(keys.has("KeyJ")), Number(keys.has("KeyO")) - Number(keys.has("KeyU"))];
+    for (const vector of [direction, rotation]) {
+      const length = Math.hypot(...vector);
+      if (length > 1) for (let i = 0; i < 3; i++) vector[i] /= length;
+    }
+    const enabled = !!(safe && keys.has("Space"));
+    return enabled ? { direction, rotation, gripper: Number(keys.has("KeyZ")) - Number(keys.has("KeyX")), enabled } : { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false };
   }
 
   // A single normal input request is in flight. Safety stops cancel it and send
@@ -70,9 +102,13 @@
     const controller = new AbortController();
     state.inputController = controller;
     const timeout = setTimeout(() => controller.abort(), 450);
-    const input = forcedStop ? { direction: [0, 0, 0], enabled: false } : sampleInput();
-    try { await request("/api/input", input, { signal: controller.signal, keepalive: forcedStop }); }
-    catch (_) { /* State polling reports the shared connection status. */ }
+    const input = forcedStop ? { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false } : sampleInput();
+    try {
+      await request("/api/input", input, { signal: controller.signal, keepalive: forcedStop });
+      $("input-error").textContent = "";
+    } catch (error) {
+      if (error.name !== "AbortError" || epoch === state.inputEpoch) $("input-error").textContent = "输入指令未送达，请检查仿真服务。";
+    }
     finally {
       clearTimeout(timeout);
       if (epoch === state.inputEpoch) {
@@ -84,6 +120,9 @@
 
   function stopInput() {
     state.keys.clear();
+    state.modeLocked = true;
+    state.needsRelease = true;
+    state.activePadId = null;
     clearTimeout(state.inputTimer);
     state.inputEpoch += 1;
     state.inputController?.abort();
@@ -134,16 +173,21 @@
     const r = state.robot;
     $("error-value").textContent = fmt(r.error_m * 1000, 2);
     $("solve-value").textContent = fmt(r.solve_ms, 3);
+    $("orientation-value").textContent = fmt(r.orientation_error_rad * 180 / Math.PI, 2);
+    const gr = r.gripper_range;
+    const aperture = Array.isArray(gr) && gr[1] > gr[0] && Number.isFinite(r.gripper_position) ? clamp((r.gripper_position - gr[0]) / (gr[1] - gr[0]), 0, 1) : null;
+    $("gripper-status").textContent = aperture === null ? "夹爪状态：—" : `夹爪开度：${Math.round(aperture * 100)}%`;
     $("sigma-value").textContent = fmt(r.sigma_min, 4);
     ["x", "y", "z"].forEach((axis, i) => $("target-" + axis).textContent = fmt(r.target?.[i], 3));
-    for (let i = 0; i < 6; i++) $("joint-" + i).textContent = Number.isFinite(r.joints?.[i]) ? `${(r.joints[i] * 180 / Math.PI).toFixed(1)}°` : "—";
+    updateJoints(r.joints);
     const active = r.enabled && !r.input_stale && state.focused;
     $("motion-dot").className = `live-dot${active ? " active" : ""}`;
     $("motion-status").textContent = active ? "输入使能中" : "待机 · 保持关节位置";
     $("run-message").className = `run-message${active ? " active" : ""}`;
-    $("run-message-text").textContent = !state.focused ? "窗口失焦，输入已停止" : r.input_stale ? "等待新输入 · 看门狗已停止输入" : active ? "正在跟踪末端目标" : "按住使能键开始移动";
+    $("run-message-text").textContent = r.fault ? `仿真故障：${typeof r.fault === "string" ? r.fault : JSON.stringify(r.fault)}` : !state.focused ? "窗口失焦，输入已停止" : r.input_stale ? "等待新输入 · 看门狗已停止输入" : active ? "正在跟踪末端目标" : "按住使能键开始移动";
     if (!state.configRunning && !state.configPending) {
-      if (r.method === "dls" || r.method === "sdls") state.method = r.method;
+      if (r.method === "dls" || r.method === "position_priority" || r.method === "sdls") state.method = r.method;
+      if (r.robot_id === "ur5e" || r.robot_id === "panda") { state.robotId = r.robot_id; $("robot-select").value = r.robot_id; }
       if (!state.configDirty && Number.isFinite(r.elbow_weight)) {
         state.elbowWeight = r.elbow_weight;
         $("elbow-weight").value = String(r.elbow_weight);
@@ -154,7 +198,7 @@
     let text = "关节限位与速度限制已启用；目标超前距离受限。";
     if (typeof c === "string" && c) text = c;
     else if (Array.isArray(c) && c.length) {
-      const labels = { hold: "待机保持", target_lead: "目标超前限幅", velocity: "速度限幅", acceleration: "加速度限幅", position_hard_stop: "关节限位保护" };
+      const labels = { hold: "待机保持", target_lead: "目标超前限幅", position_target_lead: "位置目标超前限幅", rotation_target_lead: "朝向目标超前限幅", joint_reference_lead_or_limit: "关节参考受限", braking: "关节制动限幅", velocity: "速度限幅", acceleration: "加速度限幅", position_hard_stop: "关节限位保护" };
       text = c.map((key) => labels[key] || key).join(" · ");
     }
     else if (c && typeof c === "object") {
@@ -172,7 +216,7 @@
       $("input-badge").textContent = "手柄优先";
       $("device-name").textContent = pad.id || "标准手柄已连接";
       $("device-name").title = pad.id;
-      $("device-detail").textContent = "标准映射 · 左摇杆 XY / 右摇杆 Z";
+      $("device-detail").textContent = "标准映射 · LB 使能 · RB 转动";
     } else if (pad) {
       $("input-badge").textContent = "键盘回退";
       $("device-name").textContent = "非标准手柄：映射未验证";
@@ -184,6 +228,9 @@
       $("device-name").title = "";
       $("device-detail").textContent = "连接后按任意键唤醒手柄";
     }
+    const modeLabel = state.inputMode === "rotation" ? "转动模式" : state.inputMode === "translation" ? "平移模式" : "键盘输入";
+    $("input-mode").textContent = state.modeLocked && pad?.mapping === "standard" ? `${modeLabel} · 请将摇杆回中` : state.needsRelease && pad?.mapping === "standard" ? `${modeLabel} · 请先松开 LB` : modeLabel;
+    $("input-mode").classList.toggle("waiting", !!(state.modeLocked && pad?.mapping === "standard"));
   }
 
   function updateConfigUI() {
@@ -192,14 +239,14 @@
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
-    $("method-description").textContent = state.method === "sdls" ? "按奇异方向分别限制关节增量，观察接近奇异位形时的跟踪表现。" : "使用统一阻尼抑制奇异方向的放大，可与 SDLS 对比跟踪与平滑性。";
+    $("method-description").textContent = state.method === "position_priority" ? "优先跟踪位置，再利用剩余空间追踪朝向和姿态。" : state.method === "sdls" ? "姿态扩展 SDLS（实验），按不同方向调整步长。" : "同时跟踪位置与朝向，使用阻尼减少奇异位置的速度放大。";
     $("elbow-output").textContent = state.elbowWeight.toFixed(2);
     $("elbow-weight").style.background = `linear-gradient(to right,#5b9394 ${state.elbowWeight * 100}%,#e9eeee ${state.elbowWeight * 100}%)`;
   }
 
-  async function queueConfig() {
-    state.configPending = { method: state.method, elbow_weight: state.elbowWeight };
-    if (state.configRunning) return;
+  async function queueConfig(changes) {
+    state.configPending = { ...(state.configPending || {}), ...changes };
+    if (state.configRunning) return new Promise((resolve) => state.configWaiters.push(resolve));
     state.configRunning = true;
     while (state.configPending) {
       const config = state.configPending;
@@ -216,12 +263,13 @@
       } finally { clearTimeout(timeout); }
     }
     state.configRunning = false;
+    state.configWaiters.splice(0).forEach((resolve) => resolve());
   }
 
   document.querySelectorAll("[data-method]").forEach((button) => button.addEventListener("click", () => {
     state.method = button.dataset.method;
     updateConfigUI();
-    queueConfig();
+    queueConfig({ method: state.method });
   }));
   let configDebounce;
   $("elbow-weight").addEventListener("input", (event) => {
@@ -229,9 +277,15 @@
     state.elbowWeight = Number(event.target.value);
     updateConfigUI();
     clearTimeout(configDebounce);
-    configDebounce = setTimeout(queueConfig, 100);
+    configDebounce = setTimeout(() => queueConfig({ elbow_weight: state.elbowWeight }), 100);
   });
-  $("elbow-weight").addEventListener("change", () => { clearTimeout(configDebounce); queueConfig(); });
+  $("elbow-weight").addEventListener("change", () => { clearTimeout(configDebounce); queueConfig({ elbow_weight: state.elbowWeight }); });
+  $("robot-select").addEventListener("change", async (event) => {
+    state.resetting = true; stopInput(); event.target.disabled = true;
+    state.robotId = event.target.value;
+    await queueConfig({ robot: state.robotId });
+    state.resetting = false; event.target.disabled = false;
+  });
   $("reset-arm").addEventListener("click", async () => {
     state.resetting = true;
     stopInput();
@@ -380,6 +434,26 @@
       dot(a, 2, "#7c9b91");
     }
     const tcp = project(r.tcp || points[points.length - 1]);
+    // Draw a schematic gripper in the current TCP frame; it indicates aperture,
+    // and is not a rendering of the robot collision geometry.
+    const quat = r.tcp_quat;
+    const position = r.tcp || points[points.length - 1];
+    if (Array.isArray(quat) && quat.length === 4 && quat.every(Number.isFinite)) {
+      const [w, x, y, z] = quat;
+      const rotate = ([vx, vy, vz]) => {
+        const tx = 2 * (y * vz - z * vy), ty = 2 * (z * vx - x * vz), tz = 2 * (x * vy - y * vx);
+        return [vx + w * tx + y * tz - z * ty, vy + w * ty + z * tx - x * tz, vz + w * tz + x * ty - y * tx];
+      };
+      const range = r.gripper_range;
+      const ratio = Array.isArray(range) && range.length === 2 && range[1] > range[0] && Number.isFinite(r.gripper_position)
+        ? clamp((r.gripper_position - range[0]) / (range[1] - range[0]), 0, 1) : 0.5;
+      const offset = 0.008 + 0.027 * ratio;
+      const at = (local) => { const v = rotate(local); return project(position.map((a, i) => a + v[i])); };
+      const left = at([0, offset, 0]), right = at([0, -offset, 0]);
+      line(left, right, "#436b69", 5);
+      line(left, at([0, offset, 0.06]), "#436b69", 5);
+      line(right, at([0, -offset, 0.06]), "#436b69", 5);
+    }
     dot(tcp, 10, "#2f96a319"); dot(tcp, 5, "#268797", "#f5fffa", 2);
     label("TCP", tcp, "#43858b", 10, -12);
     if (Array.isArray(r.target) && r.target.length === 3 && r.target.every(Number.isFinite)) {

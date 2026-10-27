@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Arm Teleop Lab · SDLS 运动学实验室</title>
+  <title>Arm Teleop Lab · 机械臂控制实验</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><div><h1>Arm Teleop Lab <span>/ SDLS</span></h1><p>末端位置遥操作 · 六关节运动学实验</p></div></div>
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><div><h1>Arm Teleop Lab <span>/ 控制实验</span></h1><p>末端位置、朝向与夹爪遥操作</p></div></div>
       <div class="header-status"><span class="status-pill" id="server-status"><span class="status-dot"></span><span id="server-status-text">连接仿真中</span></span><span class="version">PROTOTYPE 01</span></div>
     </header>
 
@@ -28,6 +28,7 @@
         </div>
         <div class="metrics" aria-label="实时求解指标">
           <div class="metric"><span>末端误差</span><strong id="error-value">—</strong><small>mm</small></div>
+          <div class="metric"><span>朝向误差</span><strong id="orientation-value">—</strong><small>°</small></div>
           <div class="metric"><span>上次运动计算</span><strong id="solve-value">—</strong><small>ms / 步</small></div>
           <div class="metric"><span>最小奇异值</span><strong id="sigma-value">—</strong><small>σ min · m/rad</small></div>
         </div>
@@ -36,8 +37,9 @@
 
       <aside class="control-panel" aria-label="仿真控制">
         <section class="control-card solver-card">
-          <div class="card-heading"><span class="section-number">01</span><h2>运动求解</h2><span class="tiny-label">XYZ ONLY</span></div>
-          <div class="segmented" role="group" aria-label="选择逆运动学算法"><button type="button" data-method="sdls" class="selected" aria-pressed="true">SDLS <span>选择性阻尼</span></button><button type="button" data-method="dls" aria-pressed="false">DLS <span>统一阻尼</span></button></div>
+          <div class="card-heading"><span class="section-number">01</span><h2>运动求解</h2><span class="tiny-label">6D POSE</span></div>
+          <label class="robot-select">机械臂 <select id="robot-select"><option value="ur5e">UR5e · 六轴</option><option value="panda">Panda · 七轴</option></select></label>
+          <div class="segmented" role="group" aria-label="选择逆运动学算法"><button type="button" data-method="dls" class="selected" aria-pressed="true">DLS <span>完整位姿</span></button><button type="button" data-method="position_priority" aria-pressed="false">位置优先 <span>姿态次要</span></button><button type="button" data-method="sdls" aria-pressed="false">SDLS <span>姿态扩展 · 实验</span></button></div>
           <p class="explanation" id="method-description">按奇异方向分别限制关节增量，观察接近奇异位形时的跟踪表现。</p>
           <div class="slider-heading"><label for="elbow-weight">肘部姿态偏好</label><output for="elbow-weight" id="elbow-output">0.35</output></div>
           <input type="range" id="elbow-weight" min="0" max="1" step="0.05" value="0.35" aria-describedby="elbow-help">
@@ -48,9 +50,12 @@
         <section class="control-card input-card">
           <div class="card-heading"><span class="section-number">02</span><h2>操控输入</h2><span class="input-badge" id="input-badge">键盘</span></div>
           <div class="device-state"><span class="device-icon" aria-hidden="true">⌘</span><div><strong id="device-name">未检测到手柄</strong><p id="device-detail">连接后按任意键唤醒手柄</p></div></div>
-          <div class="mapping-row"><span>左摇杆</span><strong>X / Y 平移</strong></div><div class="mapping-row"><span>右摇杆 ↑↓</span><strong>Z 升降</strong></div>
-          <div class="enable-callout"><kbd>LB</kbd><span>按住使能，松开停止运动</span></div>
-          <div class="keyboard-help"><span>无手柄时</span><div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>平移</span><kbd>Q</kbd><kbd>E</kbd><span>升降</span></div><div><kbd>Space</kbd><span>按住使能 · Q 升 / E 降</span></div></div>
+          <div class="mapping-row"><span>默认</span><strong>左摇杆 XY · 右摇杆 ↑↓ Z</strong></div><div class="mapping-row"><span>按住 RB</span><strong>左摇杆 + 右摇杆 ↔ 控制转动</strong></div><div class="mapping-row"><span>A / B</span><strong>夹爪打开 / 闭合</strong></div>
+          <div class="enable-callout"><kbd>LB</kbd><span>按住使能 · 松开停止输入</span></div>
+          <div class="mode-indicator" id="input-mode" role="status">平移模式</div>
+          <p class="small-note" id="gripper-status">夹爪状态：—</p>
+          <p class="action-message" id="input-error" role="status"></p>
+          <div class="keyboard-help"><span>键盘备用</span><div><kbd>WASD</kbd><kbd>Q/E</kbd><span>平移</span><kbd>I/K J/L U/O</kbd><span>转动</span></div><div><kbd>Z/X</kbd><span>开/合</span><kbd>Space</kbd><span>按住使能</span></div></div>
           <p class="small-note">坐标系固定在机械臂基座。切换窗口或断开手柄会停止输入。</p>
         </section>
 
@@ -63,7 +68,7 @@
         </section>
       </aside>
     </main>
-    <footer class="footer"><span><i aria-hidden="true"></i> 运动学仿真 · 不连接或驱动实物</span><span>控制位置，不控制夹爪开合 <span class="footer-divider">/</span> 不包含接触与力学建模</span></footer>
+    <footer class="footer"><span><i aria-hidden="true"></i> 仅供仿真 · 不驱动实物</span><span>手柄控制位姿和夹爪 <span class="footer-divider">/</span> 夹爪图示用于观察开合</span></footer>
   </div>
 </body>
 </html>

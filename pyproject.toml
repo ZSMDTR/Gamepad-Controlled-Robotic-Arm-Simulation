@@ -4,17 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arm-teleop-sdls"
-version = "0.1.0"
-description = "Gamepad-driven Cartesian arm teleoperation with DLS and SDLS kinematic simulation"
+version = "0.2.0"
+description = "Gamepad-driven Cartesian arm teleoperation with MuJoCo dynamics"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24,<3"]
+dependencies = ["numpy>=1.24,<3", "mujoco>=3.2,<4"]
 
 [project.scripts]
 arm-teleop = "arm_teleop.server:main"
 
 [tool.setuptools.packages.find]
-include = ["arm_teleop*"]
+include = ["arm_teleop*", "robot_models*"]
 
 [tool.setuptools.package-data]
 arm_teleop = ["static/*.html", "static/*.js", "static/*.css"]
+robot_models = ["*/model.xml", "*/LICENSE", "*/SOURCE.txt", "*/assets/*.obj", "*/assets/*.stl"]

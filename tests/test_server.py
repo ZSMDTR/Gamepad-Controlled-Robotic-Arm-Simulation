@@ -36,13 +36,15 @@ class ServerTests(unittest.TestCase):
 
     def test_input_expires_without_heartbeat(self):
         self.request("/api/reset", "{}")
+        self.request("/api/input", '{"direction":[0,0,0],"enabled":false}')
         self.assertEqual(self.request("/api/input", '{"direction":[0,1,0],"enabled":true}')[0], 200)
         self.assertTrue(self.request("/api/state")[1]["enabled"])
         time.sleep(INPUT_TIMEOUT + .06)
         state = self.request("/api/state")[1]
         self.assertTrue(state["input_stale"])
         self.assertFalse(state["enabled"])
-        self.assertEqual(state["joint_velocity"], [0.] * 6)
+        self.assertTrue(state["needs_release"])
+        self.assertTrue(all(abs(v) < 1 for v in state["joint_velocity_cmd"]))
 
     def test_invalid_and_cross_origin_input_rejected(self):
         self.assertEqual(self.request("/api/input", '{"direction":[NaN,0,0],"enabled":true}')[0], 400)
@@ -55,7 +57,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/state")[1]["method"], "dls")
         self.assertEqual(self.request("/api/reset", "{}")[0], 200)
         state = self.request("/api/state")[1]
-        self.assertEqual(state["tcp"], state["target"])
+        self.assertLess(state["error_m"], 0.003)
         self.assertIsNone(state["fault"])
 
     def test_static_routes_and_no_path_traversal(self):

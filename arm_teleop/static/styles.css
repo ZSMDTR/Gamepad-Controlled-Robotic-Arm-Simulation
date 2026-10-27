@@ -7,3 +7,14 @@
   .device-state { margin-bottom: 6px; }
   .run-card { min-height: 116px; }
 }
+
+/* 6D input and algorithm selection */
+.metrics{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.segmented{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:8px}
+.segmented button{font-size:10px}.segmented button span{font-size:8px;line-height:1.25}
+.robot-select{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#6c7f84}
+.robot-select select{width:65%;border:1px solid #dce5e3;border-radius:6px;background:#fafcfc;color:#46646a;padding:5px;font:inherit}
+.mode-indicator{margin-top:7px;font-size:10px;color:#426e72}
+.mode-indicator.waiting{color:#a36d30;font-weight:600}
+@media(max-height:800px) and (min-width:851px){.control-panel{overflow-y:auto}.control-card{flex-shrink:0}.run-card{flex:0 0 auto}.metrics{gap:6px}.metric strong{font-size:20px}.keyboard-help{margin-top:5px}}
+@media(max-width:850px){.control-panel{overflow-y:auto}.metrics{gap:6px}.metric strong{font-size:17px}.robot-select select{width:70%}}
