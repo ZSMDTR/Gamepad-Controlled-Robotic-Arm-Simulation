@@ -22,7 +22,7 @@
           <canvas id="robot-canvas" tabindex="0" aria-label="六关节机械臂三维投影，拖动旋转视角，滚轮缩放">浏览器需要支持 Canvas 以显示机械臂。</canvas>
           <div class="scene-mode"><span class="live-dot" id="motion-dot"></span><span id="motion-status">等待仿真</span></div>
           <div class="scene-hint">拖动旋转 · 滚轮缩放</div>
-          <div class="coordinates"><span class="eyebrow">目标位置 <span class="unit">m</span></span><div><span>X <strong id="target-x">—</strong></span><span>Y <strong id="target-y">—</strong></span><span>Z <strong id="target-z">—</strong></span></div></div>
+          <div class="coordinates"><span class="eyebrow">目标位置 <span class="unit">m</span></span><div><span>X <strong id="target-x">—</strong></span><span>Y <strong id="target-y">—</strong></span><span>Z <strong id="target-z">—</strong></span></div><span class="eyebrow orientation-label" title="世界坐标系 ZYX 欧拉角，仅用于显示">实际朝向 · 世界坐标</span><div><span>滚转 <strong id="actual-roll">—</strong></span><span>俯仰 <strong id="actual-pitch">—</strong></span><span>偏航 <strong id="actual-yaw">—</strong></span></div></div>
           <div class="scene-legend"><span><i class="legend-tcp"></i>实际 TCP</span><span><i class="legend-target"></i>目标点</span></div>
           <div class="loading-overlay" id="loading-overlay"><span class="loader" aria-hidden="true"></span><strong id="loading-title">正在连接本地仿真</strong><p id="loading-detail">机械臂状态将在连接后显示</p></div>
         </div>
@@ -50,9 +50,10 @@
         <section class="control-card input-card">
           <div class="card-heading"><span class="section-number">02</span><h2>操控输入</h2><span class="input-badge" id="input-badge">键盘</span></div>
           <div class="device-state"><span class="device-icon" aria-hidden="true">⌘</span><div><strong id="device-name">未检测到手柄</strong><p id="device-detail">连接后按任意键唤醒手柄</p></div></div>
-          <div class="mapping-row"><span>默认</span><strong>左摇杆 XY · 右摇杆 ↑↓ Z</strong></div><div class="mapping-row"><span>按住 RB</span><strong>左摇杆 + 右摇杆 ↔ 控制转动</strong></div><div class="mapping-row"><span>A / B</span><strong>夹爪打开 / 闭合</strong></div>
+          <div class="mapping-row"><span>默认</span><strong>左摇杆 XY · 右摇杆 ↑↓ Z</strong></div><div class="mapping-row"><span>按住 RB</span><strong>右摇杆 ↑↓ 俯仰、←→ 偏航；左摇杆 ↑↓ 滚转</strong></div><div class="mapping-row"><span>A / B</span><strong>夹爪打开 / 闭合</strong></div>
           <div class="enable-callout"><kbd>LB</kbd><span>按住使能 · 松开停止输入</span></div>
           <div class="mode-indicator" id="input-mode" role="status">平移模式</div>
+          <div class="rotation-input" id="rotation-input" role="status">转动：按住 LB + RB，回中后推动摇杆</div>
           <p class="small-note" id="gripper-status">夹爪状态：—</p>
           <p class="action-message" id="input-error" role="status"></p>
           <div class="keyboard-help"><span>键盘备用</span><div><kbd>WASD</kbd><kbd>Q/E</kbd><span>平移</span><kbd>I/K J/L U/O</kbd><span>转动</span></div><div><kbd>Z/X</kbd><span>开/合</span><kbd>Space</kbd><span>按住使能</span></div></div>

@@ -36,8 +36,32 @@ input.rotation.forEach(v => assert.ok(Math.abs(v - .5) < 1e-12));
 assert.equal(input.gripper, 1);
 pad.buttons[1].pressed = true; // Contradictory buttons cancel.
 assert.equal(sample().gripper, 0);
+// Return to translation, then change mode with right-stick vertical displaced.
+// One displaced axis must not block another centered axis in rotation mode.
+pad.buttons[5].pressed = false; pad.axes = [0,0,0,.56]; sample();
+pad.buttons[5].pressed = true; sample();
+assert.equal(state.modeLocked, true);
+pad.axes[2] = .56;
+input = sample();
+assert.ok(Math.abs(input.rotation[2] - .5) < 1e-12, 'unblocked yaw remains usable');
+assert.equal(input.rotation[1], 0, 'displaced pitch axis waits for neutral');
+pad.axes[3] = 0; sample();
+pad.axes[3] = -.56;
+input = sample();
+assert.ok(Math.abs(input.rotation[1] - .5) < 1e-12, 'right stick vertical controls pitch');
 state.focused = false;
 assert.equal(sample().enabled, false);
 state.focused = true; pads = []; state.keys = new Set(['Space', 'KeyZ']);
 assert.equal(sample().gripper, 1); // Keyboard fallback.
+const orientationStart = source.indexOf('  function orientationDegrees(matrix) {');
+const orientationEnd = source.indexOf('\n  function updateJoints(', orientationStart);
+assert.ok(orientationStart >= 0 && orientationEnd > orientationStart);
+vm.runInContext(source.slice(orientationStart, orientationEnd) + '\nthis.orientation = orientationDegrees;', context);
+const identity = [[1,0,0],[0,1,0],[0,0,1]];
+const yaw90 = [[0,-1,0],[1,0,0],[0,0,1]];
+const pitch90 = [[0,0,1],[0,1,0],[-1,0,0]];
+assert.deepEqual(JSON.parse(JSON.stringify(context.orientation(identity))), [0,0,0]);
+assert.ok(Math.abs(context.orientation(yaw90)[2] - 90) < 1e-10);
+assert.ok(Math.abs(context.orientation(pitch90)[1] - 90) < 1e-10);
+assert.equal(context.orientation([[1]]), null);
 console.log('Gamepad mapping, mode rearming, gripper and focus checks passed.');

@@ -8,7 +8,8 @@
     robot: null, connected: false, lastReceived: 0,
     focused: document.hasFocus() && !document.hidden,
     keys: new Set(), gamepad: null, method: "dls", elbowWeight: 0.35, robotId: "ur5e",
-    inputMode: null, modeLocked: true, activePadId: null, needsRelease: true, configWaiters: [],
+    inputMode: null, modeLocked: true, blockedAxes: [false, false, false, false], activePadId: null, needsRelease: true, configWaiters: [],
+    lastInput: { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false },
     camera: { yaw: -0.7, pitch: 0.47, zoom: 1 },
     inputEpoch: 0, inputController: null, inputTimer: null,
     configRunning: false, configPending: null, configDirty: false,
@@ -18,6 +19,16 @@
   const fmt = (v, digits = 2) => Number.isFinite(v) ? v.toFixed(digits) : "—";
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // ZYX roll/pitch/yaw are for display only; control uses rotation matrices.
+  function orientationDegrees(matrix) {
+    if (!Array.isArray(matrix) || matrix.length !== 3 ||
+        !matrix.every((row) => Array.isArray(row) && row.length === 3 && row.every(Number.isFinite))) return null;
+    const roll = Math.atan2(matrix[2][1], matrix[2][2]);
+    const pitch = Math.atan2(-matrix[2][0], Math.hypot(matrix[0][0], matrix[1][0]));
+    const yaw = Math.atan2(matrix[1][0], matrix[0][0]);
+    return [roll, pitch, yaw].map((v) => v * 180 / Math.PI);
+  }
 
   function updateJoints(joints) {
     if (!Array.isArray(joints)) return;
@@ -67,16 +78,24 @@
       const mode = pad.buttons[5]?.pressed ? "rotation" : "translation";
       const padId = `${pad.index}:${pad.id}`;
       if (state.inputMode !== mode || state.activePadId !== padId) {
-        state.modeLocked = true;
         state.inputMode = mode;
         state.activePadId = padId;
+        // Block only displaced axes whose meanings changed. Each axis rearms
+        // independently once centered; drift on one stick cannot block another.
+        const used = mode === "rotation" ? [0, 1, 2, 3] : [0, 1, 3];
+        state.blockedAxes = [false, false, false, false];
+        for (const i of used) state.blockedAxes[i] = axis(i) !== 0;
       }
-      // Require all sticks to be neutral once on every mode change, reconnect, or focus loss.
-      if (state.modeLocked && [0, 1, 2, 3].every((i) => axis(i) === 0)) state.modeLocked = false;
+      const used = mode === "rotation" ? [0, 1, 2, 3] : [0, 1, 3];
+      for (const i of used) if (state.blockedAxes[i] && axis(i) === 0) state.blockedAxes[i] = false;
+      state.modeLocked = used.some((i) => state.blockedAxes[i]);
+      const unlockedAxis = (i) => state.blockedAxes[i] ? 0 : axis(i);
       if (!pad.buttons[4]?.pressed) state.needsRelease = false;
       const enabled = !!(safe && !state.needsRelease && pad.buttons[4]?.pressed);
-      const direction = mode === "translation" && !state.modeLocked ? [axis(0), -axis(1), -axis(3)] : [0, 0, 0];
-      const rotation = mode === "rotation" && !state.modeLocked ? [-axis(1), axis(0), axis(2)] : [0, 0, 0];
+      const direction = mode === "translation" ? [unlockedAxis(0), -unlockedAxis(1), -unlockedAxis(3)] : [0, 0, 0];
+      // Preserve the existing left-stick mapping and make right-stick up/down
+      // control pitch too, so both axes of the right stick visibly rotate.
+      const rotation = mode === "rotation" ? [-unlockedAxis(1), clamp(unlockedAxis(0) - unlockedAxis(3), -1, 1), unlockedAxis(2)] : [0, 0, 0];
       const gripper = Number(!!pad.buttons[0]?.pressed) - Number(!!pad.buttons[1]?.pressed);
       return enabled ? { direction, rotation, gripper, enabled } : { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false };
     }
@@ -103,6 +122,7 @@
     state.inputController = controller;
     const timeout = setTimeout(() => controller.abort(), 450);
     const input = forcedStop ? { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false } : sampleInput();
+    state.lastInput = input;
     try {
       await request("/api/input", input, { signal: controller.signal, keepalive: forcedStop });
       $("input-error").textContent = "";
@@ -174,6 +194,8 @@
     $("error-value").textContent = fmt(r.error_m * 1000, 2);
     $("solve-value").textContent = fmt(r.solve_ms, 3);
     $("orientation-value").textContent = fmt(r.orientation_error_rad * 180 / Math.PI, 2);
+    const rpy = orientationDegrees(r.tcp_rotation);
+    ["roll", "pitch", "yaw"].forEach((name, i) => $("actual-" + name).textContent = rpy ? `${fmt(rpy[i], 1)}°` : "—");
     const gr = r.gripper_range;
     const aperture = Array.isArray(gr) && gr[1] > gr[0] && Number.isFinite(r.gripper_position) ? clamp((r.gripper_position - gr[0]) / (gr[1] - gr[0]), 0, 1) : null;
     $("gripper-status").textContent = aperture === null ? "夹爪状态：—" : `夹爪开度：${Math.round(aperture * 100)}%`;
@@ -229,8 +251,11 @@
       $("device-detail").textContent = "连接后按任意键唤醒手柄";
     }
     const modeLabel = state.inputMode === "rotation" ? "转动模式" : state.inputMode === "translation" ? "平移模式" : "键盘输入";
-    $("input-mode").textContent = state.modeLocked && pad?.mapping === "standard" ? `${modeLabel} · 请将摇杆回中` : state.needsRelease && pad?.mapping === "standard" ? `${modeLabel} · 请先松开 LB` : modeLabel;
+    $("input-mode").textContent = state.modeLocked && pad?.mapping === "standard" ? `${modeLabel} · 偏离的摇杆请先回中` : state.needsRelease && pad?.mapping === "standard" ? `${modeLabel} · 请先松开 LB` : modeLabel;
     $("input-mode").classList.toggle("waiting", !!(state.modeLocked && pad?.mapping === "standard"));
+    const input = state.lastInput;
+    const rotation = input?.rotation || [0, 0, 0];
+    $("rotation-input").textContent = input?.enabled ? `转动指令 X ${fmt(rotation[0], 2)} / Y ${fmt(rotation[1], 2)} / Z ${fmt(rotation[2], 2)}` : "转动：按住 LB + RB，回中后推动摇杆";
   }
 
   function updateConfigUI() {
@@ -449,6 +474,19 @@
         ? clamp((r.gripper_position - range[0]) / (range[1] - range[0]), 0, 1) : 0.5;
       const offset = 0.008 + 0.027 * ratio;
       const at = (local) => { const v = rotate(local); return project(position.map((a, i) => a + v[i])); };
+      // Tool-local axes make all three orientation changes visible, including
+      // rotation around the gripper's own axis when its jaws are closed.
+      const axisOrigin = at([0, 0, 0]);
+      for (const [vector, color, name] of [
+        [[0.13, 0, 0], "#cf554e", "工具 X"],
+        [[0, 0.13, 0], "#30935a", "工具 Y"],
+        [[0, 0, 0.13], "#367fc7", "工具 Z"],
+      ]) {
+        const endpoint = at(vector);
+        line(axisOrigin, endpoint, color, 2.8);
+        dot(endpoint, 3.5, color, "#ffffff", 1);
+        label(name, endpoint, color, 5, -5);
+      }
       const left = at([0, offset, 0]), right = at([0, -offset, 0]);
       line(left, right, "#436b69", 5);
       line(left, at([0, offset, 0.06]), "#436b69", 5);
