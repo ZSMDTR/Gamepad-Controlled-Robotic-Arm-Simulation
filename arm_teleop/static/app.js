@@ -221,7 +221,7 @@
           select.replaceChildren();
           for (const id of r.available_models) {
             const option = document.createElement("option"); option.value = id;
-            option.textContent = id === "ur5e" ? "UR5e · 六轴" : id === "panda" ? "Panda · 七轴" : id;
+            option.textContent = id === "ur5e" ? "UR5e · 六轴" : id === "panda" ? "Panda · 七轴" : id === "b601_rs" ? "reBot B601-RS · 六轴" : id;
             select.appendChild(option);
           }
         }
