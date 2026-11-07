@@ -1,8 +1,8 @@
 @echo off
 cd /d "%~dp0"
-.venv\Scripts\python.exe scripts\native_viewer.py --port 8002 --robot b601_rs --open-browser
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_b601_windows.ps1"
 if errorlevel 1 (
   echo.
-  echo MuJoCo could not start. Check the message above, then press any key.
+  echo Startup stopped. Read the message above, then press any key.
   pause >nul
 )

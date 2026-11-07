@@ -4,7 +4,19 @@
 
 ## 快速开始
 
-需要 Python 3.10+、MuJoCo 支持的系统，以及支持 Gamepad API 的桌面浏览器。模型随仓库提供。
+### B601-RS：Windows / Linux
+
+需要 Python 3.10 或更新版本、图形桌面环境和支持 Gamepad API 的桌面浏览器；首次运行需要联网下载依赖和 B601-RS 模型资源。项目自带 UR5e 和 Panda 模型，B601-RS 模型由启动流程从固定版本的 Seeed 官方仓库获取并在本机生成，不随仓库发布。
+
+1. 从 [GitHub 项目页面](https://github.com/ZSMDTR/Gamepad-Controlled-Robotic-Arm-Simulation)选择 **Code → Download ZIP**，解压到英文路径，例如 Windows 的 `C:\arm-teleop` 或 Linux 的 `~/arm-teleop`；也可以使用 Git 克隆。
+2. Windows：双击项目目录中的 `start-mujoco-b601.cmd`。Linux：在项目目录的终端运行 `bash start-mujoco-b601.sh`。首次启动会创建独立 Python 环境、安装依赖并获取模型；后续使用相同命令启动。
+3. 同时使用 MuJoCo 图形窗口和控制网页：图形窗口显示仿真，网页接收输入。启动程序会从 8002 开始寻找空闲端口；若网页未自动打开，请手动访问启动窗口显示的地址。将窗口并排后点击网页，使网页保持焦点；连接手柄并在网页按任意键。按住 LB 并轻推摇杆控制，或按住空格配合 WASD、Q/E 用键盘测试。
+
+Linux 需要可用的桌面图形会话。Ubuntu 若提示缺少 `venv`，可先安装系统包 `sudo apt install python3-venv`（具体包名可能取决于 Python 版本）。首次安装失败时请查看启动终端中的错误，确认网络与 Python 后重试。详情、操作方法和仿真限制见 [B601-RS 使用说明](B601-RS_使用说明.md)。
+
+### 手动运行网页仿真
+
+需要 Python 3.10+、MuJoCo 支持的系统，以及支持 Gamepad API 的桌面浏览器。以下方式可运行自带的 UR5e 和 Panda 模型：
 
 ```bash
 git clone https://github.com/ZSMDTR/Gamepad-Controlled-Robotic-Arm-Simulation.git
@@ -18,8 +30,6 @@ python -m arm_teleop
 ```
 
 打开 [本地仿真页面](http://127.0.0.1:8000)，连接手柄并按任意键使浏览器识别。端口占用时可运行 `python -m arm_teleop --port 8001`。请在桌面浏览器点击页面，使其获得焦点。
-
-使用 reBot Arm B601-RS 和 MuJoCo 图形窗口，请先按 [B601-RS 使用说明](B601-RS_使用说明.md) 在本机获取并生成模型，然后启动 `start-mujoco-b601.cmd`。模型资源不包含在本仓库中。
 
 ## 操作方法
 
@@ -35,7 +45,7 @@ python -m arm_teleop
 
 手柄首次接入、页面失焦或断开后，请先松开 LB、让摇杆回中，再按 LB 继续。此版本只自动识别浏览器 `standard` 映射；不受支持的手柄可使用键盘备用。设备、浏览器和系统的具体组合需要实测。
 
-页面可选 **UR5e** 或 **Panda**，以及四种算法：
+页面可选 **UR5e**、**Panda**，以及本机模型准备完成后的 **B601-RS**；并可选择四种算法：
 
 - **DLS**：默认，统一求解位置与朝向。
 - **位置优先**：先求位置，再在数值零空间中尽量求朝向；后续关节裁剪可能改变严格优先关系。
