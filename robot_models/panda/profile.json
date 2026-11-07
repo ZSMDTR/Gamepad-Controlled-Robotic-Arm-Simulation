@@ -1,0 +1,68 @@
+{
+  "model": "model.xml",
+  "tcp": "tcp",
+  "home_key": "home",
+  "joints": [
+    "joint1",
+    "joint2",
+    "joint3",
+    "joint4",
+    "joint5",
+    "joint6",
+    "joint7"
+  ],
+  "actuators": [
+    "actuator1",
+    "actuator2",
+    "actuator3",
+    "actuator4",
+    "actuator5",
+    "actuator6",
+    "actuator7"
+  ],
+  "velocity": [
+    0.8,
+    0.8,
+    0.8,
+    0.8,
+    1,
+    1,
+    1
+  ],
+  "acceleration": [
+    2,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3
+  ],
+  "gripper": {
+    "joints": [
+      "finger_joint1",
+      "finger_joint2"
+    ],
+    "bodies": [
+      "left_finger",
+      "right_finger"
+    ],
+    "closed": [
+      0,
+      0
+    ],
+    "open": [
+      0.04,
+      0.04
+    ],
+    "actuators": [
+      "actuator8"
+    ],
+    "control_closed": [
+      0
+    ],
+    "control_open": [
+      255
+    ]
+  }
+}

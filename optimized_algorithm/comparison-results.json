@@ -1,0 +1,305 @@
+{
+  "scope": "Offline MuJoCo replay; controller limits apply to references, not guaranteed physical limits. No collision or real-robot safety evaluation.",
+  "timing_note": "No pacing, GUI, browser, or network. Cycle time includes benchmark instrumentation, state reads, controller and MuJoCo steps; system load affects timings.",
+  "tracking_note": "Bounded target is controller-specific; common unbounded target integrates the same inputs from each model initial pose and can be unreachable. Both errors use measured simulated pose before physics advances.",
+  "constraint_note": "Counts are controller-reported reference constraint labels, counted once per control step; different solvers may report different labels. Scale 0.25 is a synthetic test with tighter velocity and acceleration limits, not the stock profile.",
+  "results": [
+    {
+      "robot": "ur5e",
+      "method": "dls",
+      "reference_limit_scale": 1.0,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.304259599884972,
+      "simulated_seconds_per_wall_second": 26.29333635824083,
+      "controller_ms": {
+        "mean": 0.23861212539486587,
+        "p95": 0.360330066177994,
+        "p99": 0.4575851070694625,
+        "max": 0.7156000938266516
+      },
+      "offline_cycle_ms": {
+        "mean": 0.379739875,
+        "p95": 0.567905,
+        "p99": 0.721635,
+        "max": 0.8795,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 15.02420854508799,
+        "orientation_rad": 0.06292647996269081
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 15.02420854508799,
+        "orientation_rad": 0.06292647996269081
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.6499528124278758,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.5754738468271117,
+      "constraint_event_steps": {
+        "acceleration": 56
+      }
+    },
+    {
+      "robot": "ur5e",
+      "method": "constrained_dls",
+      "reference_limit_scale": 1.0,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.6313517999369651,
+      "simulated_seconds_per_wall_second": 12.671223873596416,
+      "controller_ms": {
+        "mean": 0.6261257544974796,
+        "p95": 0.8587051299400628,
+        "p99": 1.227660032454878,
+        "max": 1.6556999180465937
+      },
+      "offline_cycle_ms": {
+        "mean": 0.7885139999999999,
+        "p95": 1.0653749999999993,
+        "p99": 1.5505939999999998,
+        "max": 1.9406,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 15.945575615642749,
+        "orientation_rad": 0.07194269304223899
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 15.945575615642749,
+        "orientation_rad": 0.07194269304223899
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.553900019170214,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.42756086516493386,
+      "constraint_event_steps": {
+        "constrained_velocity": 261
+      }
+    },
+    {
+      "robot": "panda",
+      "method": "dls",
+      "reference_limit_scale": 1.0,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.3183071999810636,
+      "simulated_seconds_per_wall_second": 25.132953324572203,
+      "controller_ms": {
+        "mean": 0.2409186214208603,
+        "p95": 0.3520251135341821,
+        "p99": 0.444028889760375,
+        "max": 0.81619992852211
+      },
+      "offline_cycle_ms": {
+        "mean": 0.39729112499999997,
+        "p95": 0.5681,
+        "p99": 0.7222699999999999,
+        "max": 1.2172,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 20.247443835661034,
+        "orientation_rad": 0.056428545342237735
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 72.04882233898766,
+        "orientation_rad": 0.056428545342237735
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.8111438709971542,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.7640326593599773,
+      "constraint_event_steps": {
+        "acceleration": 144,
+        "position_target_lead": 89,
+        "velocity": 47
+      }
+    },
+    {
+      "robot": "panda",
+      "method": "constrained_dls",
+      "reference_limit_scale": 1.0,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.6371014998294413,
+      "simulated_seconds_per_wall_second": 12.556868885320508,
+      "controller_ms": {
+        "mean": 0.6218542525311932,
+        "p95": 0.9075049310922622,
+        "p99": 1.0897719161584971,
+        "max": 1.336399931460619
+      },
+      "offline_cycle_ms": {
+        "mean": 0.795693,
+        "p95": 1.11258,
+        "p99": 1.3082070000000001,
+        "max": 1.5393,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 20.987206455236073,
+        "orientation_rad": 0.08205873146185022
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 57.95347545063221,
+        "orientation_rad": 0.08205873146185022
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.5800936801993524,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.5158866081175387,
+      "constraint_event_steps": {
+        "constrained_velocity": 332,
+        "position_target_lead": 134
+      }
+    },
+    {
+      "robot": "ur5e",
+      "method": "dls",
+      "reference_limit_scale": 0.25,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.30710399989038706,
+      "simulated_seconds_per_wall_second": 26.049807240722156,
+      "controller_ms": {
+        "mean": 0.24173175101168454,
+        "p95": 0.3680600086227059,
+        "p99": 0.46491293003782613,
+        "max": 1.1970000341534615
+      },
+      "offline_cycle_ms": {
+        "mean": 0.383302125,
+        "p95": 0.5756699999999999,
+        "p99": 0.7349779999999999,
+        "max": 1.3743,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 30.23434571370619,
+        "orientation_rad": 0.15821898538178472
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 45.20853744182086,
+        "orientation_rad": 0.15821898538178472
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.25,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.24667500458575484,
+      "constraint_event_steps": {
+        "acceleration": 423,
+        "position_target_lead": 96,
+        "velocity": 727
+      }
+    },
+    {
+      "robot": "ur5e",
+      "method": "constrained_dls",
+      "reference_limit_scale": 0.25,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.5815796998795122,
+      "simulated_seconds_per_wall_second": 13.755638310031674,
+      "controller_ms": {
+        "mean": 0.5762897492968477,
+        "p95": 0.7858900469727811,
+        "p99": 0.9278510790318248,
+        "max": 1.3592001050710678
+      },
+      "offline_cycle_ms": {
+        "mean": 0.7263580000000001,
+        "p95": 0.9731049999999998,
+        "p99": 1.152619,
+        "max": 1.5753,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 25.109332438179166,
+        "orientation_rad": 0.1699943179254238
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 52.333510896835584,
+        "orientation_rad": 0.1699943179254238
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.25,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.24619150514111876,
+      "constraint_event_steps": {
+        "constrained_velocity": 800,
+        "position_target_lead": 149
+      }
+    },
+    {
+      "robot": "panda",
+      "method": "dls",
+      "reference_limit_scale": 0.25,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.3283897000364959,
+      "simulated_seconds_per_wall_second": 24.36130000152335,
+      "controller_ms": {
+        "mean": 0.24933699634857476,
+        "p95": 0.3777998499572277,
+        "p99": 0.5089110322296617,
+        "max": 0.9683000389486551
+      },
+      "offline_cycle_ms": {
+        "mean": 0.409900375,
+        "p95": 0.59952,
+        "p99": 0.7624019999999999,
+        "max": 1.1368,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 31.654581012756847,
+        "orientation_rad": 0.16383586982715104
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 95.15772600952002,
+        "orientation_rad": 0.16383586982715104
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.25,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.2417703836161717,
+      "constraint_event_steps": {
+        "acceleration": 414,
+        "position_target_lead": 256,
+        "velocity": 706
+      }
+    },
+    {
+      "robot": "panda",
+      "method": "constrained_dls",
+      "reference_limit_scale": 0.25,
+      "steps": 800,
+      "control_dt_s": 0.01,
+      "simulated_s": 7.999999999999341,
+      "wall_s": 0.7018581000156701,
+      "simulated_seconds_per_wall_second": 11.398315414213684,
+      "controller_ms": {
+        "mean": 0.6819928777986206,
+        "p95": 0.9528949274681506,
+        "p99": 1.133594785351306,
+        "max": 1.2814002111554146
+      },
+      "offline_cycle_ms": {
+        "mean": 0.8765038749999999,
+        "p95": 1.2022849999999996,
+        "p99": 1.3901059999999998,
+        "max": 1.5657,
+        "over_10ms_count": 0
+      },
+      "bounded_target_rms": {
+        "position_mm": 28.614366290002373,
+        "orientation_rad": 0.1504202856970204
+      },
+      "common_unbounded_input_target_rms": {
+        "position_mm": 79.51600310460462,
+        "orientation_rad": 0.1504202856970204
+      },
+      "peak_abs_commanded_joint_velocity_rad_s": 0.25,
+      "peak_abs_simulated_joint_velocity_rad_s": 0.24197833308362343,
+      "constraint_event_steps": {
+        "constrained_velocity": 800,
+        "position_target_lead": 131
+      }
+    }
+  ]
+}

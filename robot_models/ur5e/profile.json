@@ -1,0 +1,67 @@
+{
+  "model": "model.xml",
+  "tcp": "tcp",
+  "home_key": "home",
+  "joints": [
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint"
+  ],
+  "actuators": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow",
+    "wrist_1",
+    "wrist_2",
+    "wrist_3"
+  ],
+  "velocity": [
+    0.8,
+    0.8,
+    0.8,
+    1,
+    1,
+    1
+  ],
+  "acceleration": [
+    2,
+    2,
+    2,
+    3,
+    3,
+    3
+  ],
+  "gripper": {
+    "joints": [
+      "demo_left_joint",
+      "demo_right_joint"
+    ],
+    "bodies": [
+      "demo_left",
+      "demo_right"
+    ],
+    "closed": [
+      0,
+      0
+    ],
+    "open": [
+      0.03,
+      0.03
+    ],
+    "actuators": [
+      "demo_left_actuator",
+      "demo_right_actuator"
+    ],
+    "control_closed": [
+      0,
+      0
+    ],
+    "control_open": [
+      0.03,
+      0.03
+    ]
+  }
+}

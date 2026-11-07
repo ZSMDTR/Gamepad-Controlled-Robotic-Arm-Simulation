@@ -8,12 +8,17 @@ const start = source.indexOf('  function sampleInput() {');
 const end = source.indexOf('\n  // A single normal input request', start);
 assert.ok(start >= 0 && end > start, 'input mapper must be present');
 const state = { focused: true, connected: true, resetting: false, keys: new Set(),
-  gamepad: null, inputMode: null, modeLocked: true, activePadId: null, needsRelease: true };
+  gamepad: null, inputMode: null, modeLocked: true, activePadId: null, needsRelease: true, keyboardNeedsRelease: false };
 const pad = { index: 0, id: 'simulated standard pad', mapping: 'standard', axes: [0,0,0,0],
   buttons: Array.from({length: 17}, () => ({pressed: false})) };
 let pads = [pad];
+const settingsContext = vm.createContext({window: {}, localStorage: {getItem: () => null}});
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../arm_teleop/static/input-settings.js'), 'utf8'), settingsContext);
+const InputSettings = settingsContext.window.InputSettings;
+const settings = InputSettings.get();
+const settingsPanel = {open: false};
 const context = vm.createContext({ state, document: {hidden:false}, gamepads: () => pads,
-  clamp: (v, lo, hi) => Math.max(lo, Math.min(hi, v)) });
+  InputSettings, $: () => settingsPanel, clamp: (v, lo, hi) => Math.max(lo, Math.min(hi, v)) });
 vm.runInContext(source.slice(start, end) + '\nthis.sample = sampleInput;', context);
 const sample = () => JSON.parse(JSON.stringify(context.sample()));
 assert.equal(sample().enabled, false); // Release first; no spontaneous motion.
@@ -53,6 +58,20 @@ state.focused = false;
 assert.equal(sample().enabled, false);
 state.focused = true; pads = []; state.keys = new Set(['Space', 'KeyZ']);
 assert.equal(sample().gripper, 1); // Keyboard fallback.
+settings.keys.enable = 'ArrowUp'; settings.keys.open = 'KeyP';
+state.keys = new Set(['ArrowUp', 'KeyP']);
+assert.equal(sample().enabled, true);
+assert.equal(sample().gripper, 1);
+state.keyboardNeedsRelease = true;
+assert.equal(sample().enabled, false);
+state.keyboardNeedsRelease = false; settingsPanel.open = true;
+assert.equal(sample().enabled, false, 'settings panel blocks motion');
+settingsPanel.open = false; pads = [pad]; pad.axes = [0, 0, 0, 0];
+settings.buttons.enable = 6; settings.axes = [1, 0, 2, 3]; settings.invert[0] = true;
+pad.buttons[4].pressed = false; pad.buttons[5].pressed = false; pad.buttons[6].pressed = false; state.needsRelease = true; state.inputMode = null;
+sample(); pad.buttons[6].pressed = true; pad.axes[1] = .56;
+assert.ok(Math.abs(sample().direction[0] + .5) < 1e-12, 'remapped and inverted axis applies');
+assert.ok(InputSettings.valid(settings));
 const orientationStart = source.indexOf('  function orientationDegrees(matrix) {');
 const orientationEnd = source.indexOf('\n  function updateJoints(', orientationStart);
 assert.ok(orientationStart >= 0 && orientationEnd > orientationStart);

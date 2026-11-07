@@ -4,7 +4,17 @@ import threading
 import time
 import unittest
 
-from arm_teleop.server import Simulation, Server, INPUT_TIMEOUT
+from arm_teleop.server import Simulation, Server, INPUT_TIMEOUT, physics_steps
+
+
+class PhysicsTimingTests(unittest.TestCase):
+    def test_physics_timestep_must_fit_control_period(self):
+        self.assertEqual(physics_steps(.002), 5)
+        self.assertEqual(physics_steps(.001), 10)
+        with self.assertRaisesRegex(ValueError, "timestep"):
+            physics_steps(.003)
+        with self.assertRaisesRegex(ValueError, "timestep"):
+            physics_steps(.02)
 
 
 class ServerTests(unittest.TestCase):
@@ -60,8 +70,17 @@ class ServerTests(unittest.TestCase):
         self.assertLess(state["error_m"], 0.003)
         self.assertIsNone(state["fault"])
 
+    def test_model_discovery_and_switch(self):
+        state = self.request("/api/state")[1]
+        self.assertIn("ur5e", state["available_models"])
+        self.assertIn("panda", state["available_models"])
+        self.assertEqual(self.request("/api/config", '{"robot":"panda"}')[0], 200)
+        self.assertEqual(self.request("/api/state")[1]["robot_id"], "panda")
+        self.assertEqual(self.request("/api/config", '{"robot":"missing"}')[0], 400)
+        self.assertEqual(self.request("/api/config", '{"robot":"ur5e"}')[0], 200)
+
     def test_static_routes_and_no_path_traversal(self):
-        for path in ("/", "/app.js", "/styles.css"):
+        for path in ("/", "/app.js", "/input-settings.js", "/styles.css"):
             status, data = self.request(path)
             self.assertEqual(status, 200)
             self.assertGreater(len(data), 100)

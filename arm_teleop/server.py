@@ -19,12 +19,20 @@ from urllib.parse import urlsplit
 import mujoco
 import numpy as np
 
-from .mujoco_backend import MujocoBackend
+from .mujoco_backend import MujocoBackend, available_models
 from .pose_control import PoseController
 
 DT = 0.01
 INPUT_TIMEOUT = 0.25
 STATIC = Path(__file__).parent / "static"
+
+
+def physics_steps(timestep):
+    """Number of physics steps per control cycle, without changing model time."""
+    count = round(DT / timestep)
+    if count < 1 or not math.isclose(count * timestep, DT, rel_tol=1e-9, abs_tol=1e-12):
+        raise ValueError("model timestep must divide the 0.01 s control period")
+    return count
 
 
 def input_vector(value):
@@ -44,6 +52,7 @@ class Simulation:
         self.method = "dls"
         self.elbow_weight = .35
         self.backend = MujocoBackend("ur5e")
+        self.physics_steps = physics_steps(self.backend.timestep)
         self.controller = self._new_controller()
         self.direction = [0.0] * 3
         self.rotation_input = [0.0] * 3
@@ -92,9 +101,9 @@ class Simulation:
     def configure(self, body):
         if not body or not set(body) <= {"method", "elbow_weight", "robot"}:
             raise ValueError("expected method, robot and/or elbow_weight")
-        if "method" in body and body["method"] not in ("dls", "sdls", "position_priority"):
+        if "method" in body and body["method"] not in ("dls", "sdls", "position_priority", "constrained_dls"):
             raise ValueError("unknown controller method")
-        if "robot" in body and body["robot"] not in ("ur5e", "panda"):
+        if "robot" in body and body["robot"] not in available_models():
             raise ValueError("unknown robot")
         if "elbow_weight" in body:
             x = body["elbow_weight"]
@@ -109,7 +118,9 @@ class Simulation:
                 self.controller.posture_gain = .2 * self.elbow_weight
             if "robot" in body and body["robot"] != self.backend.name:
                 new_backend = MujocoBackend(body["robot"])
+                new_steps = physics_steps(new_backend.timestep)
                 self.backend = new_backend
+                self.physics_steps = new_steps
                 self.controller = self._new_controller()
                 self._reset_input()
                 self.gripper_target = self.backend.state()["gripper_position"]
@@ -144,7 +155,8 @@ class Simulation:
             target = s["tcp"] if r is None else r["target_position"]
             quat = np.empty(4)
             mujoco.mju_mat2Quat(quat, s["rotation"].ravel())
-            result = dict(joints=s["q"].tolist(), joint_velocity=s["qvel"].tolist(),
+            joint_units = ["m" if self.backend.model.jnt_type[i] == mujoco.mjtJoint.mjJNT_SLIDE else "rad" for i in self.backend.joint_ids]
+            result = dict(joints=s["q"].tolist(), joint_units=joint_units, joint_velocity=s["qvel"].tolist(),
                           points=s["points"].tolist(), tcp=s["tcp"].tolist(), target=target.tolist(),
                           tcp_rotation=s["rotation"].tolist(), tcp_quat=quat.tolist(),
                           target_rotation=(s["rotation"] if r is None else r["target_rotation"]).tolist(),
@@ -153,10 +165,10 @@ class Simulation:
                           solve_ms=0 if r is None else r["solve_ms"],
                           sigma_min=float(np.linalg.svd(s["jacobian"][:3], compute_uv=False)[-1]),
                           constraints=["hold"] if r is None else r["constraints"],
-                          method=self.method, controller_mode=self.method, robot_id=self.backend.name,
+                          method=self.method, controller_mode=self.method, robot_id=self.backend.name, available_models=available_models(),
                           elbow_weight=self.elbow_weight, gripper_position=s["gripper_position"],
                           gripper_range=s["gripper_range"], gripper_target=self.gripper_target,
-                          finger_positions=s["finger_positions"].tolist(),
+                          finger_positions=s["finger_positions"].tolist(), gripper_available=bool(len(self.backend.finger_ids)),
                           actuator_force=s["actuator_force"].tolist(),
                           joint_lower=s["joint_lower"].tolist(), joint_upper=s["joint_upper"].tolist(),
                           simulation_time=s["time"], input_stale=stale,
@@ -172,12 +184,13 @@ class Simulation:
             return result
 
     def run(self):
+        # Group physics steps into one 10 ms control tick.
+        # time.sleep uses a high-resolution timer on supported Windows Python;
+        # Event.wait at 2 ms can be rounded up to the Windows timer quantum.
         deadline = time.monotonic()
-        substep = 0
         while not self.stop_event.is_set():
             start = time.monotonic()
             with self.lock:
-                dt_physics = self.backend.timestep
                 active = self.enabled and start - self.last_input <= INPUT_TIMEOUT and self.fault is None
                 if start - self.last_input > INPUT_TIMEOUT and self.enabled:
                     self.enabled = False
@@ -187,7 +200,7 @@ class Simulation:
                     self._reset_input()
                     active = False
                 try:
-                    if substep == 0 and self.fault is None:
+                    if self.fault is None:
                         s = self.backend.state()
                         r = self.controller.step(s["q"], s["qvel"], s["tcp"], s["rotation"], s["jacobian"],
                                                  self.direction, self.rotation_input, bool(active), DT)
@@ -195,7 +208,7 @@ class Simulation:
                             self.gripper_target = float(np.clip(self.gripper_target + self.gripper_input * .55 * DT, 0, 1))
                         self.backend.command(r["q_ref"], self.gripper_target)
                         self.result = r
-                    self.backend.step()
+                    self.backend.step(self.physics_steps, return_state=False)
                 except Exception as exc:
                     self.fault = f"{type(exc).__name__}: {exc}"
                     self.enabled = False
@@ -204,17 +217,16 @@ class Simulation:
                     s = self.backend.state()
                     self.backend.command(s["q"], self.gripper_target)
                 elapsed = (time.monotonic() - start) * 1000
-                if substep == 0:
-                    self.tick_ms.append(elapsed)
-                    self.tick_times.append(start)
-                if elapsed > dt_physics * 1000:
+                self.tick_ms.append(elapsed)
+                self.tick_times.append(start)
+                if elapsed > DT * 1000:
                     self.overruns += 1
-                substep = (substep + 1) % 5
-            deadline += dt_physics
+            deadline += DT
             now = time.monotonic()
             if now > deadline:
                 deadline = now
-            self.stop_event.wait(max(0, deadline - time.monotonic()))
+            # At most one control period of shutdown latency.
+            time.sleep(max(0, deadline - time.monotonic()))
 
 
 class Server(ThreadingHTTPServer):
@@ -250,7 +262,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response(200, self.server.simulation.snapshot())
             return
         files = {"/": ("index.html", "text/html"), "/index.html": ("index.html", "text/html"),
-                 "/app.js": ("app.js", "text/javascript"), "/styles.css": ("styles.css", "text/css")}
+                 "/app.js": ("app.js", "text/javascript"), "/input-settings.js": ("input-settings.js", "text/javascript"),
+                 "/styles.css": ("styles.css", "text/css")}
         if path not in files:
             self.json_response(404, {"error": "not found"})
             return

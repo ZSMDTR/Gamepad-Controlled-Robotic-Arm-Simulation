@@ -8,14 +8,13 @@
     robot: null, connected: false, lastReceived: 0,
     focused: document.hasFocus() && !document.hidden,
     keys: new Set(), gamepad: null, method: "dls", elbowWeight: 0.35, robotId: "ur5e",
-    inputMode: null, modeLocked: true, blockedAxes: [false, false, false, false], activePadId: null, needsRelease: true, configWaiters: [],
+    inputMode: null, modeLocked: true, blockedAxes: [false, false, false, false], activePadId: null, needsRelease: true, keyboardNeedsRelease: false, configWaiters: [],
     lastInput: { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false },
     camera: { yaw: -0.7, pitch: 0.47, zoom: 1 },
     inputEpoch: 0, inputController: null, inputTimer: null,
     configRunning: false, configPending: null, configDirty: false,
     resetting: false, width: 1, height: 1, drawNeeded: true,
   };
-  const keyCodes = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyI", "KeyK", "KeyJ", "KeyL", "KeyU", "KeyO", "KeyZ", "KeyX", "Space"]);
   const fmt = (v, digits = 2) => Number.isFinite(v) ? v.toFixed(digits) : "—";
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,7 +29,7 @@
     return [roll, pitch, yaw].map((v) => v * 180 / Math.PI);
   }
 
-  function updateJoints(joints) {
+  function updateJoints(joints, units) {
     if (!Array.isArray(joints)) return;
     const strip = $("joint-strip");
     if (strip.children.length !== joints.length) {
@@ -44,7 +43,7 @@
       });
     }
     joints.forEach((joint, i) => {
-      strip.children[i].querySelector("strong").textContent = Number.isFinite(joint) ? `${(joint * 180 / Math.PI).toFixed(1)}°` : "—";
+      strip.children[i].querySelector("strong").textContent = !Number.isFinite(joint) ? "—" : units?.[i] === "m" ? `${joint.toFixed(3)} m` : `${(joint * 180 / Math.PI).toFixed(1)}°`;
     });
   }
 
@@ -55,7 +54,11 @@
       body: data === undefined ? undefined : JSON.stringify(data),
       cache: "no-store", signal, keepalive,
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      let detail = "";
+      try { detail = (await response.json()).error || ""; } catch (_) { /* Non-JSON error response. */ }
+      throw new Error(detail || `HTTP ${response.status}`);
+    }
     return response.status === 204 ? null : response.json();
   }
 
@@ -65,17 +68,18 @@
   }
 
   function sampleInput() {
+    const settings = InputSettings.get();
     const pads = gamepads();
     const pad = pads.find((candidate) => candidate.mapping === "standard") || pads[0] || null;
     state.gamepad = pad;
-    const safe = state.focused && !document.hidden && state.connected && !state.resetting;
+    const safe = state.focused && !document.hidden && state.connected && !state.resetting && !$('input-settings').open;
     if (pad && pad.mapping === "standard") {
       const axis = (n) => {
-        const value = clamp(Number(pad.axes[n]) || 0, -1, 1);
-        const deadzone = 0.12;
+        const value = clamp((Number(pad.axes[settings.axes[n]]) || 0) * (settings.invert[n] ? -1 : 1), -1, 1);
+        const deadzone = settings.deadzone;
         return Math.abs(value) <= deadzone ? 0 : Math.sign(value) * (Math.abs(value) - deadzone) / (1 - deadzone);
       };
-      const mode = pad.buttons[5]?.pressed ? "rotation" : "translation";
+      const mode = pad.buttons[settings.buttons.rotate]?.pressed ? "rotation" : "translation";
       const padId = `${pad.index}:${pad.id}`;
       if (state.inputMode !== mode || state.activePadId !== padId) {
         state.inputMode = mode;
@@ -90,26 +94,27 @@
       for (const i of used) if (state.blockedAxes[i] && axis(i) === 0) state.blockedAxes[i] = false;
       state.modeLocked = used.some((i) => state.blockedAxes[i]);
       const unlockedAxis = (i) => state.blockedAxes[i] ? 0 : axis(i);
-      if (!pad.buttons[4]?.pressed) state.needsRelease = false;
-      const enabled = !!(safe && !state.needsRelease && pad.buttons[4]?.pressed);
+      if (!pad.buttons[settings.buttons.enable]?.pressed) state.needsRelease = false;
+      const enabled = !!(safe && !state.needsRelease && pad.buttons[settings.buttons.enable]?.pressed);
       const direction = mode === "translation" ? [unlockedAxis(0), -unlockedAxis(1), -unlockedAxis(3)] : [0, 0, 0];
       // Preserve the existing left-stick mapping and make right-stick up/down
       // control pitch too, so both axes of the right stick visibly rotate.
       const rotation = mode === "rotation" ? [-unlockedAxis(1), clamp(unlockedAxis(0) - unlockedAxis(3), -1, 1), unlockedAxis(2)] : [0, 0, 0];
-      const gripper = Number(!!pad.buttons[0]?.pressed) - Number(!!pad.buttons[1]?.pressed);
+      const gripper = Number(!!pad.buttons[settings.buttons.open]?.pressed) - Number(!!pad.buttons[settings.buttons.close]?.pressed);
       return enabled ? { direction, rotation, gripper, enabled } : { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false };
     }
     state.activePadId = null;
     state.inputMode = "keyboard";
     const keys = state.keys;
-    const direction = [Number(keys.has("KeyD")) - Number(keys.has("KeyA")), Number(keys.has("KeyW")) - Number(keys.has("KeyS")), Number(keys.has("KeyQ")) - Number(keys.has("KeyE"))];
-    const rotation = [Number(keys.has("KeyI")) - Number(keys.has("KeyK")), Number(keys.has("KeyL")) - Number(keys.has("KeyJ")), Number(keys.has("KeyO")) - Number(keys.has("KeyU"))];
+    const k = settings.keys;
+    const direction = [Number(keys.has(k.xPlus)) - Number(keys.has(k.xMinus)), Number(keys.has(k.yPlus)) - Number(keys.has(k.yMinus)), Number(keys.has(k.zPlus)) - Number(keys.has(k.zMinus))];
+    const rotation = [Number(keys.has(k.rollPlus)) - Number(keys.has(k.rollMinus)), Number(keys.has(k.pitchPlus)) - Number(keys.has(k.pitchMinus)), Number(keys.has(k.yawPlus)) - Number(keys.has(k.yawMinus))];
     for (const vector of [direction, rotation]) {
       const length = Math.hypot(...vector);
       if (length > 1) for (let i = 0; i < 3; i++) vector[i] /= length;
     }
-    const enabled = !!(safe && keys.has("Space"));
-    return enabled ? { direction, rotation, gripper: Number(keys.has("KeyZ")) - Number(keys.has("KeyX")), enabled } : { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false };
+    const enabled = !!(safe && !state.keyboardNeedsRelease && keys.has(k.enable));
+    return enabled ? { direction, rotation, gripper: Number(keys.has(k.open)) - Number(keys.has(k.close)), enabled } : { direction: [0, 0, 0], rotation: [0, 0, 0], gripper: 0, enabled: false };
   }
 
   // A single normal input request is in flight. Safety stops cancel it and send
@@ -142,6 +147,7 @@
     state.keys.clear();
     state.modeLocked = true;
     state.needsRelease = true;
+    state.keyboardNeedsRelease = true;
     state.activePadId = null;
     clearTimeout(state.inputTimer);
     state.inputEpoch += 1;
@@ -198,18 +204,29 @@
     ["roll", "pitch", "yaw"].forEach((name, i) => $("actual-" + name).textContent = rpy ? `${fmt(rpy[i], 1)}°` : "—");
     const gr = r.gripper_range;
     const aperture = Array.isArray(gr) && gr[1] > gr[0] && Number.isFinite(r.gripper_position) ? clamp((r.gripper_position - gr[0]) / (gr[1] - gr[0]), 0, 1) : null;
-    $("gripper-status").textContent = aperture === null ? "夹爪状态：—" : `夹爪开度：${Math.round(aperture * 100)}%`;
+    $("gripper-status").textContent = !r.gripper_available ? "此型号未配置夹爪" : aperture === null ? "夹爪状态：—" : `夹爪开度：${Math.round(aperture * 100)}%`;
     $("sigma-value").textContent = fmt(r.sigma_min, 4);
     ["x", "y", "z"].forEach((axis, i) => $("target-" + axis).textContent = fmt(r.target?.[i], 3));
-    updateJoints(r.joints);
+    updateJoints(r.joints, r.joint_units);
     const active = r.enabled && !r.input_stale && state.focused;
     $("motion-dot").className = `live-dot${active ? " active" : ""}`;
     $("motion-status").textContent = active ? "输入使能中" : "待机 · 保持关节位置";
     $("run-message").className = `run-message${active ? " active" : ""}`;
     $("run-message-text").textContent = r.fault ? `仿真故障：${typeof r.fault === "string" ? r.fault : JSON.stringify(r.fault)}` : !state.focused ? "窗口失焦，输入已停止" : r.input_stale ? "等待新输入 · 看门狗已停止输入" : active ? "正在跟踪末端目标" : "按住使能键开始移动";
     if (!state.configRunning && !state.configPending) {
-      if (r.method === "dls" || r.method === "position_priority" || r.method === "sdls") state.method = r.method;
-      if (r.robot_id === "ur5e" || r.robot_id === "panda") { state.robotId = r.robot_id; $("robot-select").value = r.robot_id; }
+      if (["dls", "constrained_dls", "position_priority", "sdls"].includes(r.method)) state.method = r.method;
+      if (Array.isArray(r.available_models) && r.available_models.every(id => typeof id === "string")) {
+        const select = $("robot-select");
+        if (Array.from(select.options, option => option.value).join("\n") !== r.available_models.join("\n")) {
+          select.replaceChildren();
+          for (const id of r.available_models) {
+            const option = document.createElement("option"); option.value = id;
+            option.textContent = id === "ur5e" ? "UR5e · 六轴" : id === "panda" ? "Panda · 七轴" : id;
+            select.appendChild(option);
+          }
+        }
+        if (r.available_models.includes(r.robot_id)) { state.robotId = r.robot_id; select.value = r.robot_id; }
+      }
       if (!state.configDirty && Number.isFinite(r.elbow_weight)) {
         state.elbowWeight = r.elbow_weight;
         $("elbow-weight").value = String(r.elbow_weight);
@@ -220,7 +237,7 @@
     let text = "关节限位与速度限制已启用；目标超前距离受限。";
     if (typeof c === "string" && c) text = c;
     else if (Array.isArray(c) && c.length) {
-      const labels = { hold: "待机保持", target_lead: "目标超前限幅", position_target_lead: "位置目标超前限幅", rotation_target_lead: "朝向目标超前限幅", joint_reference_lead_or_limit: "关节参考受限", braking: "关节制动限幅", velocity: "速度限幅", acceleration: "加速度限幅", position_hard_stop: "关节限位保护" };
+      const labels = { hold: "待机保持", target_lead: "目标超前限幅", position_target_lead: "位置目标超前限幅", rotation_target_lead: "朝向目标超前限幅", joint_reference_lead_or_limit: "关节参考受限", braking: "关节制动限幅", velocity: "速度限幅", acceleration: "加速度限幅", position_hard_stop: "关节限位保护", constrained_velocity: "关节约束生效", infeasible_velocity_bounds: "约束冲突：已降级", deadman_reference_lead_conflict: "松手时参考限制冲突", reference_lead_and_braking_relaxed: "参考领先和制动限制放宽", acceleration_relaxed_at_joint_limit: "关节限位处加速度限制放宽", solver_iteration_limit: "求解迭代到上限" };
       text = c.map((key) => labels[key] || key).join(" · ");
     }
     else if (c && typeof c === "object") {
@@ -234,11 +251,12 @@
 
   function updateInputUI() {
     const pad = state.gamepad;
+    const buttons = InputSettings.get().buttons;
     if (pad?.mapping === "standard") {
       $("input-badge").textContent = "手柄优先";
       $("device-name").textContent = pad.id || "标准手柄已连接";
       $("device-name").title = pad.id;
-      $("device-detail").textContent = "标准映射 · LB 使能 · RB 转动";
+      $("device-detail").textContent = `标准映射 · 按钮 ${buttons.enable} 使能 · 按钮 ${buttons.rotate} 转动`;
     } else if (pad) {
       $("input-badge").textContent = "键盘回退";
       $("device-name").textContent = "非标准手柄：映射未验证";
@@ -251,11 +269,11 @@
       $("device-detail").textContent = "连接后按任意键唤醒手柄";
     }
     const modeLabel = state.inputMode === "rotation" ? "转动模式" : state.inputMode === "translation" ? "平移模式" : "键盘输入";
-    $("input-mode").textContent = state.modeLocked && pad?.mapping === "standard" ? `${modeLabel} · 偏离的摇杆请先回中` : state.needsRelease && pad?.mapping === "standard" ? `${modeLabel} · 请先松开 LB` : modeLabel;
+    $("input-mode").textContent = state.modeLocked && pad?.mapping === "standard" ? `${modeLabel} · 偏离的摇杆请先回中` : state.needsRelease && pad?.mapping === "standard" ? `${modeLabel} · 请先松开使能按钮` : modeLabel;
     $("input-mode").classList.toggle("waiting", !!(state.modeLocked && pad?.mapping === "standard"));
     const input = state.lastInput;
     const rotation = input?.rotation || [0, 0, 0];
-    $("rotation-input").textContent = input?.enabled ? `转动指令 X ${fmt(rotation[0], 2)} / Y ${fmt(rotation[1], 2)} / Z ${fmt(rotation[2], 2)}` : "转动：按住 LB + RB，回中后推动摇杆";
+    $("rotation-input").textContent = input?.enabled ? `转动指令 X ${fmt(rotation[0], 2)} / Y ${fmt(rotation[1], 2)} / Z ${fmt(rotation[2], 2)}` : "转动：按住使能和转动按钮，回中后推动摇杆";
   }
 
   function updateConfigUI() {
@@ -264,7 +282,7 @@
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
-    $("method-description").textContent = state.method === "position_priority" ? "优先跟踪位置，再利用剩余空间追踪朝向和姿态。" : state.method === "sdls" ? "姿态扩展 SDLS（实验），按不同方向调整步长。" : "同时跟踪位置与朝向，使用阻尼减少奇异位置的速度放大。";
+    $("method-description").textContent = state.method === "constrained_dls" ? "在关节参考约束内求解位姿速度；约束冲突时执行降级。" : state.method === "position_priority" ? "优先跟踪位置，再利用剩余空间追踪朝向和姿态。" : state.method === "sdls" ? "姿态扩展 SDLS（实验），按不同方向调整步长。" : "同时跟踪位置与朝向，使用阻尼减少奇异位置的速度放大。";
     $("elbow-output").textContent = state.elbowWeight.toFixed(2);
     $("elbow-weight").style.background = `linear-gradient(to right,#5b9394 ${state.elbowWeight * 100}%,#e9eeee ${state.elbowWeight * 100}%)`;
   }
@@ -282,8 +300,8 @@
         await request("/api/config", config, { signal: controller.signal });
         $("action-message").textContent = "";
         state.configDirty = false;
-      } catch (_) {
-        $("action-message").textContent = "参数未保存，请连接后重试。";
+      } catch (error) {
+        $("action-message").textContent = `参数未保存：${error.message}。请检查模型配置或连接后重试。`;
         state.configDirty = false;
       } finally { clearTimeout(timeout); }
     }
@@ -326,15 +344,18 @@
     state.drawNeeded = true;
   });
 
+  InputSettings.mount(() => { stopInput(); updateInputUI(); });
   window.addEventListener("keydown", (event) => {
-    if (!keyCodes.has(event.code)) return;
+    if (!Object.values(InputSettings.get().keys).includes(event.code)) return;
     if (/INPUT|TEXTAREA|SELECT|BUTTON/.test(event.target.tagName) || event.target.isContentEditable) return;
     event.preventDefault();
+    if (event.code === InputSettings.get().keys.enable && !event.repeat) state.keyboardNeedsRelease = false;
     state.keys.add(event.code);
   });
   window.addEventListener("keyup", (event) => {
     if (state.keys.has(event.code)) event.preventDefault();
     state.keys.delete(event.code);
+    if (event.code === InputSettings.get().keys.enable) state.keyboardNeedsRelease = false;
   });
   window.addEventListener("blur", () => { state.focused = false; stopInput(); });
   window.addEventListener("focus", () => { state.focused = !document.hidden; state.keys.clear(); });
@@ -487,10 +508,12 @@
         dot(endpoint, 3.5, color, "#ffffff", 1);
         label(name, endpoint, color, 5, -5);
       }
-      const left = at([0, offset, 0]), right = at([0, -offset, 0]);
-      line(left, right, "#436b69", 5);
-      line(left, at([0, offset, 0.06]), "#436b69", 5);
-      line(right, at([0, -offset, 0.06]), "#436b69", 5);
+      if (r.gripper_available) {
+        const left = at([0, offset, 0]), right = at([0, -offset, 0]);
+        line(left, right, "#436b69", 5);
+        line(left, at([0, offset, 0.06]), "#436b69", 5);
+        line(right, at([0, -offset, 0.06]), "#436b69", 5);
+      }
     }
     dot(tcp, 10, "#2f96a319"); dot(tcp, 5, "#268797", "#f5fffa", 2);
     label("TCP", tcp, "#43858b", 10, -12);

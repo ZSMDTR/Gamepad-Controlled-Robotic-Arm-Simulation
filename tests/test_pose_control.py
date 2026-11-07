@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 
-from arm_teleop.pose_control import PoseController, rotation_exp, rotation_log, sdls_pose
+from arm_teleop.pose_control import PoseController, rotation_exp, rotation_log, sdls_pose, _box_dls
 from arm_teleop.solvers import sdls
 
 
@@ -24,6 +24,92 @@ def tick(c, q=None, tcp=None, rot=None, jac=None, move=None, turn=None, enabled=
 
 
 class PoseControlTests(unittest.TestCase):
+    def test_bounded_dls_improves_task_error_over_joint_clipping(self):
+        # A saturated joint can be compensated by the other joint. Ordinary
+        # DLS followed by independent clipping cannot make that correction.
+        j = np.array([[1., 1.], [0., 1.]])
+        target = np.array([1., .5])
+        damping = .04
+        lower, upper = np.array([-2., -2.]), np.array([.2, 2.])
+        baseline = np.clip(np.linalg.solve(j.T @ j + damping**2 * np.eye(2), j.T @ target), lower, upper)
+        result, converged = _box_dls(j, target, damping, lower, upper, np.zeros(2))
+        self.assertTrue(converged)
+        self.assertLess(np.linalg.norm(j @ result - target), np.linalg.norm(j @ baseline - target) * .8)
+        self.assertTrue(np.all(result >= lower) and np.all(result <= upper))
+
+    def test_box_dls_satisfies_kkt_for_random_singular_and_redundant_tasks(self):
+        rng = np.random.default_rng(928)
+        for rows, cols in ((3, 7), (6, 6), (6, 2)):
+            for _ in range(30):
+                j = rng.normal(size=(rows, cols))
+                j[:, 0] = 0.  # Include a rank-deficient direction.
+                target = rng.normal(size=rows)
+                lower = rng.uniform(-.7, 0, size=cols)
+                upper = rng.uniform(0, .7, size=cols)
+                center = rng.normal(size=cols)
+                x, converged = _box_dls(j, target, .04, lower, upper, center)
+                self.assertTrue(converged)
+                self.assertTrue(np.all(x >= lower - 1e-10) and np.all(x <= upper + 1e-10))
+                gradient = j.T @ (j @ x - target) + .04**2 * (x - center)
+                for i in range(cols):
+                    if x[i] <= lower[i] + 1e-8:
+                        self.assertGreaterEqual(gradient[i], -1e-8)
+                    elif x[i] >= upper[i] - 1e-8:
+                        self.assertLessEqual(gradient[i], 1e-8)
+                    else:
+                        self.assertAlmostEqual(gradient[i], 0., delta=1e-8)
+
+    def test_constrained_mode_respects_velocity_acceleration_and_reference(self):
+        c = controller(mode='constrained_dls', velocity_limit=[.03] * 6,
+                       acceleration_limit=[.2] * 6, max_joint_reference_lead=.02, posture_gain=0)
+        previous = np.zeros(6)
+        for _ in range(100):
+            state = tick(c, move=[1, 1, 0], turn=[0, 0, 1])
+            self.assertNotIn('infeasible_velocity_bounds', state['constraints'])
+            self.assertNotIn('solver_iteration_limit', state['constraints'])
+            self.assertTrue(np.all(np.abs(state['qdot_cmd']) <= .03 + 1e-10))
+            self.assertTrue(np.all(np.abs(state['qdot_cmd'] - previous) <= .002 + 1e-10))
+            self.assertTrue(np.all(np.abs(state['q_ref']) <= .02 + 1e-10))
+            previous = state['qdot_cmd'].copy()
+
+    def test_conflicting_bounds_fall_back_and_report_conflict(self):
+        c = controller(mode='constrained_dls', acceleration_limit=[.2] * 6, posture_gain=0)
+        c.q_ref = np.zeros(6)
+        c.velocity[:] = .1
+        # q moved abruptly beyond the reference-lead range. Acceleration and
+        # reference bounds cannot both be met in a single cycle.
+        previous_ref = c.q_ref.copy()
+        state = tick(c, q=np.ones(6), move=[1, 0, 0])
+        self.assertIn('infeasible_velocity_bounds', state['constraints'])
+        self.assertIn('reference_lead_and_braking_relaxed', state['constraints'])
+        np.testing.assert_allclose((state['q_ref'] - previous_ref) / .01, state['qdot_cmd'])
+        self.assertTrue(np.all(np.abs(state['qdot_cmd']) <= c.vmax + 1e-10))
+        self.assertTrue(np.all(np.abs(state['qdot_cmd'] - .1) <= .002 + 1e-10))
+        self.assertTrue(np.isfinite(state['q_ref']).all())
+
+    def test_deadman_with_measured_state_jump_keeps_reference_continuous(self):
+        c = controller(n=1, mode='constrained_dls', acceleration_limit=[.2], posture_gain=0)
+        tick(c)
+        previous_ref = c.q_ref.copy()
+        c.velocity[:] = .1
+        result = tick(c, q=[-.5], enabled=False)
+        self.assertIn('hold', result['constraints'])
+        self.assertIn('deadman_reference_lead_conflict', result['constraints'])
+        self.assertIn('reference_lead_and_braking_relaxed', result['constraints'])
+        np.testing.assert_allclose((result['q_ref'] - previous_ref) / .01, result['qdot_cmd'])
+        self.assertLessEqual(abs(result['qdot_cmd'][0] - .1), .002 + 1e-10)
+        self.assertLessEqual(abs(result['q_ref'][0] - previous_ref[0]), .01 + 1e-10)
+
+    def test_conflict_at_hard_joint_bound_reports_acceleration_relaxation(self):
+        c = controller(n=1, mode='constrained_dls', acceleration_limit=[.2], posture_gain=0)
+        c.q_ref = np.array([2.])
+        c.velocity[:] = .1
+        state = tick(c, q=[-1.])
+        self.assertIn('infeasible_velocity_bounds', state['constraints'])
+        self.assertIn('acceleration_relaxed_at_joint_limit', state['constraints'])
+        np.testing.assert_allclose(state['q_ref'], [2.])
+        np.testing.assert_allclose(state['qdot_cmd'], [0.])
+
     def test_exp_log_for_axes_and_near_pi(self):
         for axis in np.eye(3):
             for angle in (0, 1e-8, .4, np.pi - 1e-7, np.pi):

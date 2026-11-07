@@ -14,8 +14,8 @@ dependencies = ["numpy>=1.24,<3", "mujoco>=3.2,<4"]
 arm-teleop = "arm_teleop.server:main"
 
 [tool.setuptools.packages.find]
-include = ["arm_teleop*", "robot_models*"]
+include = ["arm_teleop*", "robot_models*", "optimized_algorithm*"]
 
 [tool.setuptools.package-data]
 arm_teleop = ["static/*.html", "static/*.js", "static/*.css"]
-robot_models = ["*/model.xml", "*/LICENSE", "*/SOURCE.txt", "*/assets/*.obj", "*/assets/*.stl"]
+robot_models = ["*/model.xml", "*/profile.json", "*/LICENSE", "*/SOURCE.txt", "*/assets/*.obj", "*/assets/*.stl"]
