@@ -16,6 +16,8 @@ import mujoco.viewer
 from arm_teleop.server import DT, Server, Simulation, physics_steps
 from arm_teleop.mujoco_backend import MujocoBackend, available_models
 from arm_teleop.b601_scene import make_b601_scene_profile
+from arm_teleop.world_axes import add_world_axes, update_tcp_axes
+from optimized_algorithm.native_control import make_native_controller
 from scripts.native_input import NativeInput, disabled
 
 
@@ -56,8 +58,15 @@ def show_native_viewer(simulation):
         with mujoco.viewer.launch_passive(simulation.backend.model, simulation.backend.data,
                                           show_left_ui=True, show_right_ui=True) as viewer:
             simulation.native_hold_on_release = True
-            print('Focus MuJoCo. Hold Shift + WASD/QE to move; I/K, J/L, U/O rotate; Z/X control the gripper.', flush=True)
-            print('Gamepad: hold LB, move sticks; RB changes to rotation, A/B open/close the gripper.', flush=True)
+            if simulation.backend.name == 'b601_rs':
+                viewer.cam.lookat[:] = [.2, 0, .28]
+                viewer.cam.distance = 2.0
+                viewer.cam.azimuth = 135
+                viewer.cam.elevation = -25
+            axes = add_world_axes(viewer.user_scn)
+            print('Focus MuJoCo. Shift + W/S: forward/back; A/D: left/right; Q/E: up/down.', flush=True)
+            print('Shift + I/K, J/L, U/O: rotate about world X/Y/Z; Z/X: gripper.', flush=True)
+            print('Gamepad: hold LB, move one stick axis; hold RB for rotation; A/B: gripper.', flush=True)
             try:
                 deadline = time.monotonic()
                 next_sync = deadline
@@ -66,6 +75,8 @@ def show_native_viewer(simulation):
                     start = time.monotonic()
                     simulation.tick(start, deadline)
                     if start >= next_sync:
+                        update_tcp_axes(viewer.user_scn, axes,
+                                        simulation.backend.data.site_xpos[simulation.backend.tcp_id])
                         viewer.sync()
                         next_sync = start + 1 / 30
                     deadline += DT
@@ -99,8 +110,10 @@ def main():
                 scene_profile = make_b601_scene_profile(profile, scene_dir)
                 simulation.backend = MujocoBackend('b601_rs', profile_path=scene_profile)
                 simulation.physics_steps = physics_steps(simulation.backend.timestep)
-                simulation.controller = simulation._new_controller()
                 simulation.gripper_target = simulation.backend.state()['gripper_position']
+            simulation.method = 'constrained_dls'
+            simulation.elbow_weight = 0.
+            simulation.controller = make_native_controller(simulation.backend.spec)
             try:
                 show_native_viewer(simulation)
             except KeyboardInterrupt:

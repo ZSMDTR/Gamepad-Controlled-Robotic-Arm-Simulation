@@ -11,7 +11,7 @@ class NativeInputTest(unittest.TestCase):
         sample = self.mapper.sample
         self.assertFalse(sample(True, {'SHIFT', 'W'}, None)['enabled'])
         self.assertFalse(sample(True, set(), None)['enabled'])
-        self.assertEqual(sample(True, {'SHIFT', 'W'}, None)['direction'], [0, 1, 0])
+        self.assertEqual(sample(True, {'SHIFT', 'W'}, None)['direction'], [1, 0, 0])
         self.assertFalse(sample(False, {'SHIFT', 'W'}, None)['enabled'])
         self.assertFalse(sample(True, {'SHIFT', 'W'}, None)['enabled'])
         sample(True, set(), None)
@@ -25,10 +25,10 @@ class NativeInputTest(unittest.TestCase):
             return (0, axes, buttons)
         centered = [0., 0., 0., 0.]
         sample(True, set(), pad(centered))
-        self.assertGreater(sample(True, set(), pad([.5, 0, 0, 0], 4))['direction'][0], 0)
+        self.assertLess(sample(True, set(), pad([.5, 0, 0, 0], 4))['direction'][1], 0)
         self.assertEqual(sample(True, set(), pad([.5, 0, 0, 0], 4, 5))['rotation'], [0, 0, 0])
         sample(True, set(), pad(centered, 4, 5))
-        self.assertGreater(sample(True, set(), pad([.5, 0, 0, 0], 4, 5))['rotation'][1], 0)
+        self.assertLess(sample(True, set(), pad([.5, 0, 0, 0], 4, 5))['rotation'][1], 0)
         # A held keyboard enable cannot take over on disconnect.
         self.assertFalse(sample(True, {'SHIFT', 'W'}, None)['enabled'])
         sample(True, set(), None)
@@ -41,11 +41,77 @@ class NativeInputTest(unittest.TestCase):
         buttons[4] = 1
         buttons[0] = 1
         result = self.mapper.sample(True, set(), (1, [.1, -.5, 0., 0.], buttons))
-        self.assertEqual(result['direction'][0], 0)
-        self.assertGreater(result['direction'][1], 0)
+        self.assertEqual(result['direction'][1], 0)
+        self.assertGreater(result['direction'][0], 0)
         self.assertEqual(result['gripper'], 1)
         buttons[1] = 1
         self.assertEqual(self.mapper.sample(True, set(), pad)['gripper'], 0)
+
+    def test_keyboard_axes_match_world_frame(self):
+        self.mapper.sample(True, set(), None)
+        for key, field, expected in [
+            ('W', 'direction', [1, 0, 0]), ('S', 'direction', [-1, 0, 0]),
+            ('A', 'direction', [0, 1, 0]), ('D', 'direction', [0, -1, 0]),
+            ('Q', 'direction', [0, 0, 1]), ('E', 'direction', [0, 0, -1]),
+            ('I', 'rotation', [1, 0, 0]), ('K', 'rotation', [-1, 0, 0]),
+            ('J', 'rotation', [0, 1, 0]), ('L', 'rotation', [0, -1, 0]),
+            ('U', 'rotation', [0, 0, 1]), ('O', 'rotation', [0, 0, -1]),
+        ]:
+            with self.subTest(key=key):
+                result = self.mapper.sample(True, {'SHIFT', key}, None)
+                self.assertEqual(result[field], expected)
+                other = 'rotation' if field == 'direction' else 'direction'
+                self.assertEqual(result[other], [0, 0, 0])
+
+    def test_gamepad_primary_axis_rejects_diagonal_noise(self):
+        def pad(axes, rotation=False):
+            buttons = [0] * 15
+            buttons[4], buttons[5] = 1, int(rotation)
+            return (0, axes, buttons)
+        buttons = [0] * 15
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        self.assertEqual(self.mapper.sample(True, set(), pad([0.] * 4))['direction'], [0, 0, 0])
+        # Left stick tilted mostly forward: no Y or Z drift despite noise.
+        result = self.mapper.sample(True, set(), pad([.3, -.8, 0., .2]))
+        self.assertGreater(result['direction'][0], 0)
+        self.assertEqual(result['direction'][1:], [0, 0])
+        # Switch modes with centered sticks, then use right-stick X for Z rotation.
+        self.mapper.sample(True, set(), pad([0.] * 4, True))
+        result = self.mapper.sample(True, set(), pad([.2, -.3, .8, .9], True))
+        self.assertEqual(result['rotation'][:2], [0, 0])
+        self.assertGreater(result['rotation'][2], 0)
+        self.assertEqual(result['direction'], [0, 0, 0])
+
+    def test_gamepad_translation_axes_follow_world_frame(self):
+        buttons = [0] * 15
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        buttons[4] = 1
+        for raw, world_index, sign in [
+            ([0, -1, 0, 0], 0, 1), ([0, 1, 0, 0], 0, -1),
+            ([-1, 0, 0, 0], 1, 1), ([1, 0, 0, 0], 1, -1),
+            ([0, 0, 0, -1], 2, 1), ([0, 0, 0, 1], 2, -1),
+        ]:
+            with self.subTest(raw=raw):
+                direction = self.mapper.sample(True, set(), (0, raw, buttons))['direction']
+                expected = [0, 0, 0]
+                expected[world_index] = sign
+                self.assertEqual(direction, expected)
+
+    def test_gamepad_rotation_axes_are_independent_in_world_frame(self):
+        buttons = [0] * 15
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        buttons[4] = buttons[5] = 1
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        for raw, world_index, sign in [
+            ([0, -1, 0, 0], 0, 1), ([0, 1, 0, 0], 0, -1),
+            ([-1, 0, 0, 0], 1, 1), ([1, 0, 0, 0], 1, -1),
+            ([0, 0, 1, 0], 2, 1), ([0, 0, -1, 0], 2, -1),
+        ]:
+            with self.subTest(raw=raw):
+                rotation = self.mapper.sample(True, set(), (0, raw, buttons))['rotation']
+                expected = [0, 0, 0]
+                expected[world_index] = sign
+                self.assertEqual(rotation, expected)
 
 
 if __name__ == '__main__':

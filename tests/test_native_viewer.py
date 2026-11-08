@@ -66,6 +66,7 @@ class NativeViewerTest(unittest.TestCase):
                 samples.append('closed')
 
         class Viewer:
+            user_scn = mujoco.MjvScene(original_model, maxgeom=50)
             def __enter__(self): return self
             def __exit__(self, *args): return False
             def is_running(self): return not samples

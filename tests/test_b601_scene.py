@@ -7,7 +7,9 @@ import numpy as np
 
 from arm_teleop.b601_scene import make_b601_scene_profile
 from arm_teleop.mujoco_backend import MujocoBackend
-from arm_teleop.pose_control import PoseController, rotation_log
+from optimized_algorithm.native_control import make_native_controller
+from arm_teleop.pose_control import rotation_log
+from scripts.native_input import primary_axis
 
 
 class B601PracticeSceneTest(unittest.TestCase):
@@ -85,23 +87,33 @@ class B601PracticeSceneTest(unittest.TestCase):
             mujoco.mj_forward(model, goal_data)
             grasp_pos = goal_data.site_xpos[backend.tcp_id].copy()
             grasp_rot = goal_data.site_xmat[backend.tcp_id].reshape(3, 3).copy()
-            controller = PoseController(dict(backend.spec, mode='dls', posture_gain=.07))
+            controller = make_native_controller(backend.spec)
             home = backend.state()['tcp']
             cube = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'practice_cube')
             cube_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, 'practice_cube_geom')
             grip = 1.
             phases = [('open', home, 2), ('rotate', home, 10),
-                      ('approach', grasp_pos, 20), ('close', grasp_pos, 3),
+                      ('approach', grasp_pos, 70), ('close', grasp_pos, 3),
                       ('lift', grasp_pos + [0, 0, .06], 8),
                       ('carry', grasp_pos + [.05, 0, .06], 8),
                       ('release', grasp_pos + [.05, 0, .06], 3)]
             for phase, target, seconds in phases:
+                # Let the virtual sticks return to center before each phase,
+                # including the gamepad's rotation-to-translation switch.
+                state = backend.state()
+                result = controller.step(state['q'], state['qvel'], state['tcp'], state['rotation'],
+                                         state['jacobian'], np.zeros(3), np.zeros(3), True, .01)
+                backend.command(result['q_ref'], grip)
+                backend.step(5, return_state=False)
                 for _ in range(seconds * 100):
                     state = backend.state()
                     error = target - state['tcp']
                     rot_error = rotation_log(grasp_rot @ state['rotation'].T)
-                    translation = np.zeros(3) if phase == 'rotate' else np.clip(error * 3, -.8, .8)
+                    gain = 12 if phase in ('lift', 'carry', 'release') else 3
+                    translation = np.zeros(3) if phase == 'rotate' else np.clip(error * gain, -.8, .8)
                     rotation = np.clip(rot_error * 1.2, -.8, .8) if phase == 'rotate' else np.zeros(3)
+                    translation = primary_axis(translation)
+                    rotation = primary_axis(rotation)
                     if phase == 'close':
                         grip = max(0., grip - .55 * .01)
                     elif phase == 'release':
@@ -110,7 +122,9 @@ class B601PracticeSceneTest(unittest.TestCase):
                                              state['jacobian'], translation, rotation, True, .01)
                     backend.command(result['q_ref'], grip)
                     backend.step(5, return_state=False)
-                if phase == 'close':
+                if phase == 'approach':
+                    self.assertLess(np.linalg.norm(backend.state()['tcp'] - grasp_pos), .002)
+                elif phase == 'close':
                     contacts = set()
                     for contact in data.contact[:data.ncon]:
                         if cube_geom in (contact.geom1, contact.geom2):
@@ -125,6 +139,7 @@ class B601PracticeSceneTest(unittest.TestCase):
                     self.assertGreater(data.xpos[cube, 2], .325)
                 elif phase == 'release':
                     self.assertAlmostEqual(data.xpos[cube, 2], .282, delta=.003)
+                    self.assertGreater(data.xpos[cube, 0], .435)
 
 
 if __name__ == '__main__':

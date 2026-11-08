@@ -28,6 +28,12 @@ def unit(values):
     return [value / max(1., length) for value in values]
 
 
+def primary_axis(values):
+    """Keep the strongest stick axis so a slightly diagonal push stays axial."""
+    index = max(range(len(values)), key=lambda i: abs(values[i]))
+    return [value if i == index else 0. for i, value in enumerate(values)]
+
+
 class InputMapper:
     """Fail-closed focus/deadman state and browser-compatible gamepad mapping."""
     def __init__(self):
@@ -65,8 +71,11 @@ class InputMapper:
                 self.needs_release = False
             if not pressed or self.needs_release:
                 return disabled()
-            direction = [axes[0], -axes[1], -axes[3]] if mode == 'translation' else [0., 0., 0.]
-            rotation = [-axes[1], max(-1., min(1., axes[0] - axes[3])), axes[2]] if mode == 'rotation' else [0., 0., 0.]
+            # World frame: +X forward from base, +Y robot left, +Z up.
+            # In rotation mode the inputs are independent world-axis angular
+            # commands; no joystick axis contributes to two rotations.
+            direction = primary_axis([-axes[1], -axes[0], -axes[3]]) if mode == 'translation' else [0., 0., 0.]
+            rotation = primary_axis([-axes[1], -axes[0], axes[2]]) if mode == 'rotation' else [0., 0., 0.]
             return dict(direction=direction, rotation=rotation,
                         gripper=int(bool(buttons[0])) - int(bool(buttons[1])), enabled=True)
         pressed = 'SHIFT' in keys
@@ -76,8 +85,8 @@ class InputMapper:
             return disabled()
         def pair(a, b):
             return float(a in keys) - float(b in keys)
-        return dict(direction=unit([pair('D', 'A'), pair('W', 'S'), pair('Q', 'E')]),
-                    rotation=unit([pair('I', 'K'), pair('L', 'J'), pair('O', 'U')]),
+        return dict(direction=unit([pair('W', 'S'), pair('A', 'D'), pair('Q', 'E')]),
+                    rotation=unit([pair('I', 'K'), pair('J', 'L'), pair('U', 'O')]),
                     gripper=int('Z' in keys) - int('X' in keys), enabled=True)
 
 
