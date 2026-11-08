@@ -48,6 +48,7 @@ class Simulation:
     """One physics owner thread; commands and snapshots are protected by a lock."""
     def __init__(self):
         self.lock = threading.Lock()
+        self.native_hold_on_release = False
         self.stop_event = threading.Event()
         self.method = "dls"
         self.elbow_weight = .35
@@ -183,49 +184,54 @@ class Simulation:
             result["tick_p99_ms"] = ordered[math.ceil(.99 * len(ordered)) - 1] if ordered else 0
             return result
 
+    def tick(self, start, deadline):
+        """Advance one control period. The caller supplies any viewer lock."""
+        with self.lock:
+            active = self.enabled and start - self.last_input <= INPUT_TIMEOUT and self.fault is None
+            if start - self.last_input > INPUT_TIMEOUT and self.enabled:
+                self.enabled = False
+                self.needs_release = True
+                active = False
+            if start - deadline > INPUT_TIMEOUT:
+                self._reset_input()
+                active = False
+            try:
+                if self.fault is None:
+                    s = self.backend.state()
+                    if self.native_hold_on_release and not active and self.controller.was_enabled:
+                        # Native simulation: discard accumulated servo lead
+                        # when the deadman is released or input expires.
+                        self.controller.reset()
+                    r = self.controller.step(s["q"], s["qvel"], s["tcp"], s["rotation"], s["jacobian"],
+                                             self.direction, self.rotation_input, bool(active), DT)
+                    if active:
+                        self.gripper_target = float(np.clip(self.gripper_target + self.gripper_input * .55 * DT, 0, 1))
+                    self.backend.command(r["q_ref"], self.gripper_target)
+                    self.result = r
+                self.backend.step(self.physics_steps, return_state=False)
+            except Exception as exc:
+                self.fault = f"{type(exc).__name__}: {exc}"
+                self.enabled = False
+                self.needs_release = True
+                # Stop issuing the old moving reference, then keep physics alive.
+                s = self.backend.state()
+                self.backend.command(s["q"], self.gripper_target)
+            elapsed = (time.monotonic() - start) * 1000
+            self.tick_ms.append(elapsed)
+            self.tick_times.append(start)
+            if elapsed > DT * 1000:
+                self.overruns += 1
+
     def run(self):
         # Group physics steps into one 10 ms control tick.
-        # time.sleep uses a high-resolution timer on supported Windows Python;
-        # Event.wait at 2 ms can be rounded up to the Windows timer quantum.
         deadline = time.monotonic()
         while not self.stop_event.is_set():
             start = time.monotonic()
-            with self.lock:
-                active = self.enabled and start - self.last_input <= INPUT_TIMEOUT and self.fault is None
-                if start - self.last_input > INPUT_TIMEOUT and self.enabled:
-                    self.enabled = False
-                    self.needs_release = True
-                    active = False
-                if start - deadline > INPUT_TIMEOUT:
-                    self._reset_input()
-                    active = False
-                try:
-                    if self.fault is None:
-                        s = self.backend.state()
-                        r = self.controller.step(s["q"], s["qvel"], s["tcp"], s["rotation"], s["jacobian"],
-                                                 self.direction, self.rotation_input, bool(active), DT)
-                        if active:
-                            self.gripper_target = float(np.clip(self.gripper_target + self.gripper_input * .55 * DT, 0, 1))
-                        self.backend.command(r["q_ref"], self.gripper_target)
-                        self.result = r
-                    self.backend.step(self.physics_steps, return_state=False)
-                except Exception as exc:
-                    self.fault = f"{type(exc).__name__}: {exc}"
-                    self.enabled = False
-                    self.needs_release = True
-                    # Stop issuing the old moving reference, then keep physics alive.
-                    s = self.backend.state()
-                    self.backend.command(s["q"], self.gripper_target)
-                elapsed = (time.monotonic() - start) * 1000
-                self.tick_ms.append(elapsed)
-                self.tick_times.append(start)
-                if elapsed > DT * 1000:
-                    self.overruns += 1
+            self.tick(start, deadline)
             deadline += DT
             now = time.monotonic()
             if now > deadline:
                 deadline = now
-            # At most one control period of shutdown latency.
             time.sleep(max(0, deadline - time.monotonic()))
 
 

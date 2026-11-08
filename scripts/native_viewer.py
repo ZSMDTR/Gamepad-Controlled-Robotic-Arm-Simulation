@@ -1,13 +1,10 @@
-"""Run a local teleoperation server with a MuJoCo native display.
-
-The native viewer displays a copy of the simulation data; control and physics
-remain owned by Simulation. The browser must be focused to supply input.
-"""
+"""Run the native MuJoCo practice window, optionally with the legacy web UI."""
 import argparse
 import copy
 from pathlib import Path
 import sys
 import threading
+import tempfile
 import time
 import webbrowser
 
@@ -16,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mujoco
 import mujoco.viewer
 
-from arm_teleop.server import Server, Simulation
-from arm_teleop.mujoco_backend import available_models
+from arm_teleop.server import DT, Server, Simulation, physics_steps
+from arm_teleop.mujoco_backend import MujocoBackend, available_models
+from arm_teleop.b601_scene import make_b601_scene_profile
+from scripts.native_input import NativeInput, disabled
 
 
 def copy_view_data(simulation, model, data):
@@ -50,8 +49,39 @@ def show_viewer(simulation):
                 return
 
 
+def show_native_viewer(simulation):
+    """Use the actual physics data, synchronizing viewer and physics access."""
+    inputs = NativeInput()
+    try:
+        with mujoco.viewer.launch_passive(simulation.backend.model, simulation.backend.data,
+                                          show_left_ui=True, show_right_ui=True) as viewer:
+            simulation.native_hold_on_release = True
+            print('Focus MuJoCo. Hold Shift + WASD/QE to move; I/K, J/L, U/O rotate; Z/X control the gripper.', flush=True)
+            print('Gamepad: hold LB, move sticks; RB changes to rotation, A/B open/close the gripper.', flush=True)
+            try:
+                deadline = time.monotonic()
+                next_sync = deadline
+                while viewer.is_running():
+                    simulation.set_input(inputs.poll())
+                    start = time.monotonic()
+                    simulation.tick(start, deadline)
+                    if start >= next_sync:
+                        viewer.sync()
+                        next_sync = start + 1 / 30
+                    deadline += DT
+                    now = time.monotonic()
+                    if now > deadline:
+                        deadline = now
+                    time.sleep(max(0, deadline - time.monotonic()))
+            finally:
+                simulation.set_input(disabled())
+                simulation.close()
+    finally:
+        inputs.close()
+
+
 def main():
-    parser = argparse.ArgumentParser(description="MuJoCo viewer and browser teleoperation")
+    parser = argparse.ArgumentParser(description="MuJoCo native teleoperation")
     parser.add_argument("--port", type=int, default=8002)
     parser.add_argument("--robot", default="ur5e", help="robot profile name (default: ur5e)")
     parser.add_argument("--open-browser", action="store_true", help="open the browser control page")
@@ -62,6 +92,20 @@ def main():
         parser.error(f"robot {args.robot!r} is unavailable; configured models: {', '.join(available_models())}")
     simulation = Simulation()
     simulation.configure({"robot": args.robot})
+    if not args.open_browser:
+        with tempfile.TemporaryDirectory(prefix='b601-scene-') as scene_dir:
+            if args.robot == 'b601_rs':
+                profile = Path(__file__).resolve().parent.parent / 'robot_models' / 'b601_rs' / 'profile.json'
+                scene_profile = make_b601_scene_profile(profile, scene_dir)
+                simulation.backend = MujocoBackend('b601_rs', profile_path=scene_profile)
+                simulation.physics_steps = physics_steps(simulation.backend.timestep)
+                simulation.controller = simulation._new_controller()
+                simulation.gripper_target = simulation.backend.state()['gripper_position']
+            try:
+                show_native_viewer(simulation)
+            except KeyboardInterrupt:
+                pass
+        return
     server = Server(("127.0.0.1", args.port), simulation)
     simulation.start()
     thread = threading.Thread(target=server.serve_forever, daemon=True)

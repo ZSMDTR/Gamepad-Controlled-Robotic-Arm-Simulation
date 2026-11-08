@@ -60,19 +60,6 @@ elif [ ! -f robot_models/b601_rs/model.xml ] || [ ! -f robot_models/b601_rs/prof
   exit 1
 fi
 
-# Pick an available localhost port. The server still reports an error if a
-# different process takes it between this check and the server binding it.
-PORT=$("$PYTHON" -c 'import socket
-for port in range(8002, 8103):
-    with socket.socket() as sock:
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            continue
-        print(port)
-        break
-else:
-    raise SystemExit("Ports 8002–8102 are in use. Close an existing server and retry.")') || exit 1
-echo "Opening MuJoCo and http://127.0.0.1:$PORT/"
-echo 'Keep this terminal open. Focus the browser page to control the arm.'
-exec "$PYTHON" scripts/native_viewer.py --port "$PORT" --robot b601_rs --open-browser
+echo 'Opening the B601-RS MuJoCo practice scene.'
+echo 'Keep this terminal open. Control the arm in the MuJoCo window.'
+exec "$PYTHON" scripts/native_viewer.py --robot b601_rs

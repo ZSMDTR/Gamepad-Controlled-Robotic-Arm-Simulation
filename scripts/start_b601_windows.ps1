@@ -82,23 +82,7 @@ if (!(Test-Path -LiteralPath $model)) {
     exit 1
 }
 
-$port = $null
-foreach ($number in 8002..8102) {
-    $listener = $null
-    try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $number)
-        $listener.Start()
-        $port = $number
-        break
-    } catch {} finally {
-        if ($listener) { $listener.Stop() }
-    }
-}
-if (!$port) {
-    Write-Host 'No free local port found between 8002 and 8102. Close an application using those ports and retry.'
-    exit 1
-}
-Write-Host "Starting B601-RS. Control page: http://127.0.0.1:$port/"
-Write-Host 'Keep this window open. Focus the browser to control; close MuJoCo to stop.'
-& $python (Join-Path $PSScriptRoot 'native_viewer.py') --port $port --robot b601_rs --open-browser
+Write-Host 'Starting the B601-RS MuJoCo practice scene.'
+Write-Host 'Keep this window open. Use the MuJoCo window to control the arm; close it to stop.'
+& $python (Join-Path $PSScriptRoot 'native_viewer.py') --robot b601_rs
 exit $LASTEXITCODE
