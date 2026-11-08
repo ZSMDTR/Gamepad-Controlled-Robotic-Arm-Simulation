@@ -41,6 +41,19 @@ class InputMapper:
         self.needs_release = True
         self.mode = None
         self.blocked = [False] * 4
+        self.rotation_axis = None
+
+    def rotation_primary_axis(self, values):
+        """Keep the selected axis until another is clearly stronger."""
+        strongest = max(range(len(values)), key=lambda i: abs(values[i]))
+        current = self.rotation_axis
+        if not any(values):
+            self.rotation_axis = None
+            return [0.] * len(values)
+        if current is None or not values[current] or abs(values[strongest]) > abs(values[current]) + .15:
+            current = strongest
+        self.rotation_axis = current
+        return [value if i == current else 0. for i, value in enumerate(values)]
 
     def sample(self, focused, keys, pad):
         # pad is (stable identity, axes, buttons) or None. A GLFW standard
@@ -50,11 +63,13 @@ class InputMapper:
             self.source = None
             self.needs_release = True
             self.mode = None
+            self.rotation_axis = None
             return disabled()
         if source != self.source:
             self.source = source
             self.needs_release = True
             self.mode = None
+            self.rotation_axis = None
         if pad:
             _, raw_axes, buttons = pad
             axes = [axis(raw_axes[i]) for i in range(4)]
@@ -63,6 +78,7 @@ class InputMapper:
             if mode != self.mode:
                 self.mode = mode
                 self.blocked = [value != 0 for value in axes]
+                self.rotation_axis = None
             for i, value in enumerate(axes):
                 if value == 0:
                     self.blocked[i] = False
@@ -70,12 +86,13 @@ class InputMapper:
             if not pressed:
                 self.needs_release = False
             if not pressed or self.needs_release:
+                self.rotation_axis = None
                 return disabled()
             # World frame: +X forward from base, +Y robot left, +Z up.
             # In rotation mode the inputs are independent world-axis angular
             # commands; no joystick axis contributes to two rotations.
             direction = primary_axis([-axes[1], -axes[0], -axes[3]]) if mode == 'translation' else [0., 0., 0.]
-            rotation = primary_axis([-axes[1], -axes[0], axes[2]]) if mode == 'rotation' else [0., 0., 0.]
+            rotation = self.rotation_primary_axis([-axes[1], -axes[0], axes[2]]) if mode == 'rotation' else [0., 0., 0.]
             return dict(direction=direction, rotation=rotation,
                         gripper=int(bool(buttons[0])) - int(bool(buttons[1])), enabled=True)
         pressed = 'SHIFT' in keys

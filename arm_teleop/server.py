@@ -49,6 +49,7 @@ class Simulation:
     def __init__(self):
         self.lock = threading.Lock()
         self.native_hold_on_release = False
+        self._native_previous_rotation = np.zeros(3)
         self.stop_event = threading.Event()
         self.method = "dls"
         self.elbow_weight = .35
@@ -198,10 +199,19 @@ class Simulation:
             try:
                 if self.fault is None:
                     s = self.backend.state()
-                    if self.native_hold_on_release and not active and self.controller.was_enabled:
-                        # Native simulation: discard accumulated servo lead
-                        # when the deadman is released or input expires.
-                        self.controller.reset()
+                    if self.native_hold_on_release:
+                        rotation = np.asarray(self.rotation_input) if active else np.zeros(3)
+                        # Re-anchor on release, reversal or a change of rotation
+                        # axis so a previous angular target cannot keep driving.
+                        changed_rotation = (np.any(self._native_previous_rotation)
+                                            and np.dot(self._native_previous_rotation, rotation) <= 0)
+                        if not active and self.controller.was_enabled:
+                            self.controller.reset()
+                        elif changed_rotation:
+                            # Keep joint-reference continuity while discarding
+                            # the old angular target once at the input edge.
+                            self.controller.target_rotation = s['rotation'].copy()
+                        self._native_previous_rotation = rotation.copy()
                     r = self.controller.step(s["q"], s["qvel"], s["tcp"], s["rotation"], s["jacobian"],
                                              self.direction, self.rotation_input, bool(active), DT)
                     if active:

@@ -17,7 +17,7 @@ def make_b601_scene_profile(source_profile_path, output_directory):
     robot_xml = (source_profile_path.parent / profile['model']).resolve()
     tree = ET.parse(robot_xml)
     root = tree.getroot()
-    root.set('model', 'B601-RS Improved World Axes')
+    root.set('model', 'B601-RS Refined Rotation')
     compiler = root.find('compiler')
     meshdir = compiler.get('meshdir', '.')
     compiler.set('meshdir', str((robot_xml.parent / meshdir).resolve()))

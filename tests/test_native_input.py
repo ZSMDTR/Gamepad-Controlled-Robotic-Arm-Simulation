@@ -113,6 +113,42 @@ class NativeInputTest(unittest.TestCase):
                 expected[world_index] = sign
                 self.assertEqual(rotation, expected)
 
+    def test_rotation_axis_does_not_flicker_near_diagonal(self):
+        buttons = [0] * 15
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        buttons[4] = buttons[5] = 1
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        sample = lambda axes: self.mapper.sample(True, set(), (0, axes, buttons))['rotation']
+
+        self.assertGreater(sample([-.68, -.70, 0, 0])[0], 0)
+        # Small fluctuations around equal deflection must not change axes.
+        for axes in ([-.71, -.69, 0, 0], [-.69, -.71, 0, 0]):
+            result = sample(axes)
+            self.assertGreater(result[0], 0)
+            self.assertEqual(result[1:], [0, 0])
+        # A clearly deliberate move to another axis still switches normally.
+        result = sample([-.9, -.4, 0, 0])
+        self.assertEqual(result[0], 0)
+        self.assertGreater(result[1], 0)
+        # Releasing the selected axis allows a new axis immediately.
+        result = sample([0, -.2, 0, 0])
+        self.assertGreater(result[0], 0)
+        self.assertEqual(result[1], 0)
+        self.assertEqual(sample([0, 0, 0, 0]), [0, 0, 0])
+
+    def test_rotation_axis_resets_after_deadman_release(self):
+        buttons = [0] * 15
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        buttons[4] = buttons[5] = 1
+        self.mapper.sample(True, set(), (0, [0.] * 4, buttons))
+        self.mapper.sample(True, set(), (0, [-.68, -.70, 0, 0], buttons))
+        buttons[4] = 0
+        self.assertFalse(self.mapper.sample(True, set(), (0, [0.] * 4, buttons))['enabled'])
+        buttons[4] = 1
+        result = self.mapper.sample(True, set(), (0, [-.71, -.69, 0, 0], buttons))['rotation']
+        self.assertEqual(result[0], 0)
+        self.assertGreater(result[1], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
