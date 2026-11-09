@@ -203,6 +203,7 @@ class LeaderFollowTest(unittest.TestCase):
             events.append((sim.leader_active, sim.enabled, sim.leader_status))
 
         with patch('scripts.native_viewer.NativeInput', Inputs), \
+             patch('scripts.native_viewer.load_home', return_value={'version': 1, 'positions_rad': [0.] * 7, 'tolerances_rad': [.08] * 7}), \
              patch('scripts.native_viewer.prepare_auxiliary_view', return_value=(None, None, None, None)), \
              patch('scripts.native_viewer.viewer_windows', return_value=set()), \
              patch('scripts.native_viewer.mujoco.viewer.launch_passive', return_value=Viewer()), \
@@ -255,6 +256,7 @@ class LeaderFollowTest(unittest.TestCase):
                         sim.stop_leader('STALE - PRESS F11')
 
                 with patch('scripts.native_viewer.NativeInput', Inputs), \
+                     patch('scripts.native_viewer.load_home', return_value={'version': 1, 'positions_rad': [0.] * 7, 'tolerances_rad': [.08] * 7}), \
                      patch('scripts.native_viewer.prepare_auxiliary_view', return_value=(None, None, None, None)), \
                      patch('scripts.native_viewer.viewer_windows', return_value=set()), \
                      patch('scripts.native_viewer.mujoco.viewer.launch_passive', return_value=Viewer()), \

@@ -1,8 +1,10 @@
 """Read the seven Fashion Star leader positions without commanding motion.
 
 Only the single-turn angle query (0x0a) is sent.  Values have not been
-calibrated or mapped to the simulated robot.  A complete sample's timestamp is
-the start of its first query, so it is a conservative estimate of sample age.
+calibrated or mapped to the simulated robot. Once all seven have been read,
+each response publishes a rolling snapshot. Its axes are not simultaneous and
+may be separated by one polling cycle; the timestamp is the oldest axis query
+start, giving a conservative estimate of the snapshot's age.
 """
 from dataclasses import dataclass
 import math
@@ -104,16 +106,21 @@ class LeaderReader:
             device.port = self.port
             device.open()
             device.reset_input_buffer()
+            positions = [None] * 7
+            started = [None] * 7
             while not self._stop.is_set():
-                positions = []
-                started = time.monotonic()
                 for servo_id in range(7):
+                    query_started = time.monotonic()
                     value = _read_position(device, servo_id, self._stop)
                     if self._stop.is_set():
                         return
                     if value is None:
                         raise TimeoutError(f'No valid response from servo ID {servo_id}')
-                    positions.append(value)
+                    positions[servo_id] = value
+                    started[servo_id] = query_started
+                    if all(t is not None for t in started):
+                        with self._lock:
+                            self._sample = LeaderSample(tuple(positions), min(started))
                     # Vendor recommends 5–10 ms between successive commands.
                     # On Windows Event.wait can round 5 ms to ~15.6 ms;
                     # sleep keeps the interval without that extra rounding.
@@ -122,8 +129,6 @@ class LeaderReader:
                     time.sleep(0.005)
                     if self._stop.is_set():
                         return
-                with self._lock:
-                    self._sample = LeaderSample(tuple(positions), started)
         except Exception as exc:
             with self._lock:
                 self._sample = None

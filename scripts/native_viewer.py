@@ -18,12 +18,84 @@ from arm_teleop.server import DT, Server, Simulation, leader_configuration, phys
 from arm_teleop.mujoco_backend import MujocoBackend, available_models
 from arm_teleop.b601_scene import make_b601_scene_profile
 from arm_teleop.recorder import EpisodeRecorder, recording_metadata
+from arm_teleop.leader_home import MAX_SAMPLE_AGE, compare_home, load_home, save_home
 from arm_teleop.world_axes import add_world_axes, update_tcp_axes
 from optimized_algorithm.native_control import make_native_controller
 from scripts.native_input import NativeInput, disabled
 from scripts.window_layout import arrange_viewers, viewer_windows
 
 RECORDING_DIR = Path(__file__).resolve().parent.parent / 'recordings'
+LEADER_HOME_PATH = Path(__file__).resolve().parent.parent / 'leader-home.json'
+
+
+def start_leader_at_home(simulation, reader, config, path, now):
+    """Require the same local reference pose every time following starts."""
+    try:
+        home = load_home(path)
+    except (OSError, ValueError):
+        simulation.leader_status = 'HOME NOT SET - F12'
+        return False
+    current = reader.latest()
+    try:
+        at_home, errors = compare_home(home, current, now)
+    except ValueError:
+        simulation.leader_status = 'NO FRESH DATA'
+        return False
+    if not at_home:
+        ids = [str(i) for i, (error, limit) in enumerate(zip(errors, home['tolerances_rad']))
+               if error > limit + 1e-12]
+        simulation.leader_status = 'NOT HOME - IDs ' + ','.join(ids)
+        return False
+    return simulation.start_leader(current, config, now)
+
+
+class LeaderHomeCapture:
+    """Collect a stationary reference after the user's explicit F12 press."""
+    def __init__(self, path):
+        self.path = path
+        self.started = None
+        self.samples = []
+
+    def begin(self, now):
+        self.started = now
+        self.samples = []
+
+    def cancel(self):
+        self.started = None
+        self.samples = []
+
+    def update(self, reader, now):
+        if self.started is None:
+            return None
+        if now - self.started > 2.:
+            self.cancel()
+            return 'HOME TIMEOUT - F12'
+        sample = reader.latest()
+        values = Simulation._leader_values(sample, now)
+        if values is None or now - values[1] > MAX_SAMPLE_AGE:
+            self.cancel()
+            return 'HOME NO DATA - F12'
+        timestamp = values[1]
+        if timestamp < self.started or (self.samples and timestamp == self.samples[-1].timestamp):
+            return None
+        if self.samples and timestamp < self.samples[-1].timestamp:
+            self.cancel()
+            return 'HOME DATA ERROR - F12'
+        self.samples.append(sample)
+        self.samples = [item for item in self.samples if timestamp - item.timestamp <= .45]
+        if timestamp - self.samples[0].timestamp < .30:
+            return None
+        try:
+            save_home(self.path, self.samples, now)
+        except ValueError:
+            # Movement or a sampling gap: wait for another stable interval.
+            return None
+        except OSError as exc:
+            self.cancel()
+            print(f'Cannot save leader home: {exc}', flush=True)
+            return 'HOME SAVE ERROR'
+        self.cancel()
+        return 'HOME SAVED - F11'
 
 
 def finish_recording(simulation, outcome, reason):
@@ -132,14 +204,19 @@ def show_native_viewer(simulation, reader=None, leader_config=None):
             print('Gamepad: hold LB, move one stick axis; hold RB for rotation; A/B: gripper.', flush=True)
             print(f'F8 start recording; F9 save success; F10 save failure. Data: {RECORDING_DIR}', flush=True)
             if reader is not None:
-                print('F11: toggle experimental leader following. Joint and gripper mappings require physical verification.', flush=True)
+                print('F12: save leader home while holding it still; F11: start/stop following at home.', flush=True)
+                print('Joint and gripper mappings require physical verification.', flush=True)
             try:
                 deadline = time.monotonic()
                 next_sync = deadline
                 last_status_update = deadline
                 suppress_manual = False
+                home_capture = LeaderHomeCapture(LEADER_HOME_PATH)
                 while viewer.is_running():
                     sample = inputs.poll()
+                    if home_capture.started is not None and not inputs.record_commands.focused:
+                        home_capture.cancel()
+                        simulation.leader_status = 'HOME CANCELLED - F12'
                     if (reader is not None and simulation.leader_active and
                             not inputs.record_commands.focused):
                         simulation.stop_leader('FOCUS LOST - PRESS F11')
@@ -159,12 +236,34 @@ def show_native_viewer(simulation, reader=None, leader_config=None):
                         elif command == 'leader_toggle' and reader is not None:
                             if simulation.leader_active:
                                 simulation.stop_leader()
+                            elif home_capture.started is not None:
+                                simulation.leader_status = 'HOME SAVING - WAIT'
                             else:
-                                simulation.start_leader(reader.latest(), leader_config, time.monotonic())
+                                start_leader_at_home(simulation, reader, leader_config,
+                                                     LEADER_HOME_PATH, time.monotonic())
                             suppress_manual = True
                             print(f'Leader: {simulation.leader_status}', flush=True)
-                        set_recording_text(viewer, 'MAIN VIEW', record_status)
-                        set_recording_text(auxiliary, 'AUX VIEW', record_status)
+                        elif command == 'leader_save_home' and reader is not None:
+                            if simulation.leader_active:
+                                simulation.leader_status = 'STOP LEADER - F11'
+                            elif simulation.recorder is not None:
+                                simulation.leader_status = 'STOP RECORDING - F12'
+                            else:
+                                home_capture.begin(time.monotonic())
+                                simulation.leader_status = 'HOLD STILL - F12'
+                            print(f'Leader: {simulation.leader_status}', flush=True)
+                        status = record_status if reader is None else f'{record_status} | LEADER {simulation.leader_status}'
+                        set_recording_text(viewer, 'MAIN VIEW', status)
+                        set_recording_text(auxiliary, 'AUX VIEW', status)
+                    if home_capture.started is not None:
+                        if simulation.recorder is not None:
+                            home_capture.cancel()
+                            simulation.leader_status = 'HOME CANCELLED - RECORDING'
+                        else:
+                            home_status = home_capture.update(reader, time.monotonic())
+                            if home_status is not None:
+                                simulation.leader_status = home_status
+                                print(f'Leader: {home_status}', flush=True)
                     if simulation.leader_active:
                         simulation.set_leader_sample(reader.latest(), time.monotonic())
                         sample = disabled()

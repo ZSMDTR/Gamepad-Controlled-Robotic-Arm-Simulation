@@ -106,6 +106,66 @@ class LeaderSerialTests(unittest.TestCase):
         self.assertFalse(device.dtr)
         self.assertFalse(device.rts)
 
+    def test_publishes_each_axis_after_first_complete_snapshot(self):
+        device = FakeSerial(lambda sid, count: response(sid, (count - 1) * 100 + sid))
+        reader = LeaderReader('test')
+        clock = [100.]
+        snapshots = []
+
+        def after_query(seconds):
+            self.assertEqual(seconds, .005)
+            snapshots.append(reader.latest())
+            clock[0] += seconds
+            if len(snapshots) == 9:
+                reader._stop.set()
+
+        with patch('arm_teleop.leader_serial.serial.Serial', return_value=device), \
+             patch('arm_teleop.leader_serial.time.monotonic', side_effect=lambda: clock[0]), \
+             patch('arm_teleop.leader_serial.time.sleep', side_effect=after_query):
+            reader._run()
+
+        self.assertEqual(snapshots[:6], [None] * 6)
+        first, second, third = snapshots[6:]
+        self.assertAlmostEqual(first.timestamp, 100.)
+        self.assertAlmostEqual(second.timestamp, 100.005)
+        self.assertAlmostEqual(third.timestamp, 100.010)
+        self.assertAlmostEqual(first.positions[0], 0.)
+        self.assertAlmostEqual(second.positions[0], math.radians(10.))
+        self.assertEqual(second.positions[1:], first.positions[1:])
+        self.assertAlmostEqual(third.positions[1], math.radians(10.1))
+        self.assertEqual(third.positions[2:], second.positions[2:])
+
+    def test_oldest_axis_timestamp_reveals_delayed_snapshot(self):
+        from arm_teleop.server import Simulation
+
+        clock = [100.]
+
+        class DelayedSerial(FakeSerial):
+            def write(self, frame):
+                if frame[4] == 6:
+                    clock[0] += .6
+                return super().write(frame)
+
+        reader = LeaderReader('test')
+        device = DelayedSerial()
+        seen = []
+
+        def after_query(seconds):
+            clock[0] += seconds
+            if reader.latest() is not None:
+                seen.append((reader.latest(), clock[0]))
+                reader._stop.set()
+
+        with patch('arm_teleop.leader_serial.serial.Serial', return_value=device), \
+             patch('arm_teleop.leader_serial.time.monotonic', side_effect=lambda: clock[0]), \
+             patch('arm_teleop.leader_serial.time.sleep', side_effect=after_query):
+            reader._run()
+        self.assertEqual(len(seen), 1)
+        snapshot, now = seen[0]
+        self.assertAlmostEqual(snapshot.timestamp, 100.)
+        self.assertGreater(now - snapshot.timestamp, .5)
+        self.assertIsNone(Simulation._leader_values(snapshot, now))
+
     def test_disconnect_clears_last_sample_and_reports_error(self):
         device = FakeSerial(lambda sid, count: b'' if sid == 3 and count > 1
                             else response(sid, 100))

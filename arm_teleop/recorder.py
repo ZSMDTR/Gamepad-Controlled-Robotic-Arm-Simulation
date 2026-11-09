@@ -63,6 +63,7 @@ def recording_metadata(simulation, scene_id, control_dt):
               'max_joint_reference_lead', 'posture_gain', 'sdls_gamma')
     root = Path(__file__).resolve().parent.parent
     code_files = ('arm_teleop/server.py', 'arm_teleop/b601_scene.py', 'arm_teleop/leader_serial.py',
+                  'arm_teleop/leader_home.py',
                   'optimized_algorithm/pose_control.py', 'optimized_algorithm/native_control.py',
                   'scripts/native_viewer.py', 'scripts/native_input.py')
     try:

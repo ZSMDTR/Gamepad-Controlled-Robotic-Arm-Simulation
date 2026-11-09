@@ -18,7 +18,7 @@
 
 示教采集：在 MuJoCo 窗口按 F8 开始录制、F9 人工标记成功并保存、F10 人工标记失败并保存；数据保存在本地 `recordings/`。Windows 双击 `replay-latest.cmd`，Linux 运行 `bash replay-latest.sh` 可状态回放最近一条。详见 [B601-RS 使用说明](B601-RS_使用说明.md)。
 
-示教主臂试验：Windows 双击 `start-leader-mujoco.cmd` 并输入主臂串口；Linux 启动方法见使用说明。在 MuJoCo 窗口按 F11 启停相对跟随，先逐个关节小幅验证方向与夹爪。当前只支持兼容的 7 通道 Fashion Star UART 设备；映射尚需按具体硬件确认。
+示教主臂试验：Windows 双击 `start-leader-mujoco.cmd` 并输入主臂串口；Linux 启动方法见使用说明。首次在 MuJoCo 窗口将主臂摆好并按 F12 保存原位；此后每次按 F11 启动跟随前须回到原位，先逐个关节小幅验证方向与夹爪。当前只支持兼容的 7 通道 Fashion Star UART 设备；映射尚需按具体硬件确认。
 
 Linux 需要可用的桌面图形会话。Ubuntu 若提示缺少 `venv`，可先安装系统包 `sudo apt install python3-venv`（具体包名可能取决于 Python 版本）。首次安装失败时请查看启动终端中的错误，确认网络与 Python 后重试。详情、操作方法和仿真限制见 [B601-RS 使用说明](B601-RS_使用说明.md)。
 
