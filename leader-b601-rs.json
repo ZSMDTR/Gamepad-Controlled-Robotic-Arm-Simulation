@@ -1,5 +1,8 @@
 {
   "joint_indices": [0, 1, 2, 3, 4, 5],
   "joint_scales": [1, 1, -1, -1, -1, 1],
-  "gripper_scale": 1.2
+  "gripper_scale": 1.2,
+  "joint_speed_limit": 0.3,
+  "joint_acceleration_limit": 1.0,
+  "gripper_speed_limit": 0.6
 }

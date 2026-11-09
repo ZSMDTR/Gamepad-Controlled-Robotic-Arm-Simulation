@@ -115,7 +115,12 @@ class LeaderReader:
                         raise TimeoutError(f'No valid response from servo ID {servo_id}')
                     positions.append(value)
                     # Vendor recommends 5–10 ms between successive commands.
-                    if self._stop.wait(0.005):
+                    # On Windows Event.wait can round 5 ms to ~15.6 ms;
+                    # sleep keeps the interval without that extra rounding.
+                    if self._stop.is_set():
+                        return
+                    time.sleep(0.005)
+                    if self._stop.is_set():
                         return
                 with self._lock:
                     self._sample = LeaderSample(tuple(positions), started)

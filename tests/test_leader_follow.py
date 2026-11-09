@@ -47,8 +47,8 @@ class LeaderFollowTest(unittest.TestCase):
         self.tick()
         self.assertGreater(sim.leader_ref[0], before_ref[0])
         self.assertLess(sim.leader_ref[2], before_ref[2])
-        self.assertTrue(np.all(np.abs(sim.leader_ref - before_ref) <= .1 * DT + 1e-10))
-        self.assertLessEqual(sim.gripper_target - before_gripper, .2 * DT + 1e-10)
+        self.assertTrue(np.all(np.abs(sim.leader_ref - before_ref) <= .3 * DT + 1e-10))
+        self.assertLessEqual(sim.gripper_target - before_gripper, .6 * DT + 1e-10)
         self.assertGreaterEqual(sim.gripper_target, 0.)
         self.assertLessEqual(sim.gripper_target, 1.)
 
@@ -115,6 +115,58 @@ class LeaderFollowTest(unittest.TestCase):
         ):
             with self.subTest(config=bad), self.assertRaises(ValueError):
                 leader_configuration(bad)
+
+    def test_optional_limits_defaults_and_invalid_values(self):
+        settings = leader_configuration(CONFIG)
+        self.assertEqual((settings['joint_speed_limit'], settings['joint_acceleration_limit'],
+                          settings['gripper_speed_limit']), (.3, 1., .6))
+        for key in ('joint_speed_limit', 'joint_acceleration_limit', 'gripper_speed_limit'):
+            for value in (0, -1, float('nan'), float('inf'), True, '1', None):
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    leader_configuration(dict(CONFIG, **{key: value}))
+        with self.assertRaises(ValueError):
+            leader_configuration(dict(CONFIG, gripper_speed_limit=1.01))
+
+    def test_requested_limits_are_capped_by_model(self):
+        sim = self.sim
+        sim.backend.spec['velocity_limit'][:] = .12
+        sim.backend.spec['acceleration_limit'][:] = .25
+        config = dict(CONFIG, joint_speed_limit=3., joint_acceleration_limit=3.)
+        self.assertTrue(sim.start_leader(sample([0.] * 7, self.now), config, self.now))
+        velocity = sim.leader_velocity.copy()
+        for _ in range(20):
+            self.now += DT
+            sim.set_leader_sample(sample([.2] * 7, self.now), self.now)
+            self.tick()
+            self.assertTrue(np.all(np.abs(sim.leader_velocity) <= .12 + 1e-9))
+            self.assertTrue(np.all(np.abs(sim.leader_velocity - velocity) <= .25 * DT + 1e-9))
+            velocity = sim.leader_velocity.copy()
+
+    def test_brakes_to_hold_without_overshoot(self):
+        sim = self.sim
+        initial = sim.backend.state()['q'].copy()
+        self.assertTrue(sim.start_leader(sample([0.] * 7, self.now), CONFIG, self.now))
+        target = initial[0] + .2
+        velocity = sim.leader_velocity.copy()
+        refs = []
+        for _ in range(300):
+            self.now += DT
+            sim.set_leader_sample(sample([.2] + [0.] * 6, self.now), self.now)
+            before = sim.backend.state()['q']
+            self.tick()
+            self.assertLessEqual(abs(sim.leader_ref[0] - before[0]), .03 + 1e-9)
+            # The existing lead bound takes priority when the simulated
+            # actuator cannot keep up, and can relax acceleration locally.
+            if abs(sim.leader_velocity[0] - velocity[0]) > DT + 1e-9:
+                self.assertAlmostEqual(abs(sim.leader_ref[0] - before[0]), .03, places=8)
+            self.assertLessEqual(abs(sim.leader_velocity[0]), .3 + 1e-9)
+            self.assertLessEqual(sim.leader_ref[0], target + 1e-9)
+            self.assertGreaterEqual(sim.leader_ref[0], sim.backend.spec['lower'][0])
+            self.assertLessEqual(sim.leader_ref[0], sim.backend.spec['upper'][0])
+            velocity = sim.leader_velocity.copy()
+            refs.append(sim.leader_ref[0])
+        self.assertAlmostEqual(refs[-1], target, places=6)
+        self.assertLess(max(refs[-50:]) - min(refs[-50:]), 1e-8)
 
     def test_replay_rejects_bad_leader_sample_but_accepts_legacy(self):
         legacy = {'direction': [0.] * 3, 'rotation': [0.] * 3, 'enabled': True, 'gripper': 0}

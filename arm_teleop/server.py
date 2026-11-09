@@ -48,7 +48,9 @@ def input_vector(value):
 
 def leader_configuration(config):
     """Validate the user-editable experimental mapping before connecting."""
-    if not isinstance(config, dict) or set(config) != {'joint_indices', 'joint_scales', 'gripper_scale'}:
+    required = {'joint_indices', 'joint_scales', 'gripper_scale'}
+    limits = {'joint_speed_limit': .3, 'joint_acceleration_limit': 1., 'gripper_speed_limit': .6}
+    if not isinstance(config, dict) or not required <= set(config) or set(config) - required - set(limits):
         raise ValueError('leader config requires joint_indices, joint_scales and gripper_scale')
     indices = config['joint_indices']
     scales = config['joint_scales']
@@ -62,7 +64,14 @@ def leader_configuration(config):
             isinstance(grip, bool) or not isinstance(grip, (int, float)) or
             not math.isfinite(grip) or abs(grip) > 2):
         raise ValueError('joint_scales and gripper_scale must be finite numbers in [-2, 2]')
-    return {'joint_indices': list(indices), 'joint_scales': list(scales), 'gripper_scale': grip}
+    for name, default in limits.items():
+        value = config.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f'{name} must be a positive finite number')
+        limits[name] = float(value)
+    if limits['gripper_speed_limit'] > 1:
+        raise ValueError('gripper_speed_limit must not exceed 1 per second')
+    return {'joint_indices': list(indices), 'joint_scales': list(scales), 'gripper_scale': grip, **limits}
 
 
 class Simulation:
@@ -165,7 +174,7 @@ class Simulation:
                 return False
             s = self.backend.state()
             self.controller.reset()
-            self.leader_config = {'joint_indices': indices.copy(), 'joint_scales': scales.copy(), 'gripper_scale': grip_scale}
+            self.leader_config = {**config, 'joint_indices': indices.copy(), 'joint_scales': scales.copy(), 'gripper_scale': grip_scale}
             self.leader_origin = values[0]
             self.leader_sample = values
             self.leader_unwrapped = values[0].copy()
@@ -207,9 +216,13 @@ class Simulation:
         indices = self.leader_config['joint_indices']
         desired = np.clip(self.leader_q_origin + (positions[indices] - self.leader_origin[indices]) *
                           self.leader_config['joint_scales'], spec['lower'], spec['upper'])
-        vmax = np.minimum(spec['velocity_limit'], .1)
-        amax = np.minimum(spec['acceleration_limit'], .5)
-        wanted = np.clip((desired - self.leader_ref) / DT, -vmax, vmax)
+        vmax = np.minimum(spec['velocity_limit'], self.leader_config['joint_speed_limit'])
+        amax = np.minimum(spec['acceleration_limit'], self.leader_config['joint_acceleration_limit'])
+        error = desired - self.leader_ref
+        # Brake before reaching the moving target so acceleration limiting does
+        # not make the reference repeatedly overshoot it.
+        braking_speed = np.maximum(0., np.sqrt((amax * DT) ** 2 + 2 * amax * np.abs(error)) - amax * DT)
+        wanted = np.clip(error / DT, -np.minimum(vmax, braking_speed), np.minimum(vmax, braking_speed))
         velocity = np.clip(wanted, self.leader_velocity - amax * DT, self.leader_velocity + amax * DT)
         ref = self.leader_ref + velocity * DT
         ref = np.clip(ref, np.maximum(spec['lower'], state['q'] - .03),
@@ -217,7 +230,8 @@ class Simulation:
         self.leader_velocity = (ref - self.leader_ref) / DT
         self.leader_ref = ref
         grip = self.leader_gripper_origin + (positions[6] - self.leader_origin[6]) * self.leader_config['gripper_scale']
-        self.gripper_target += float(np.clip(np.clip(grip, 0., 1.) - self.gripper_target, -.2 * DT, .2 * DT))
+        grip_step = self.leader_config['gripper_speed_limit'] * DT
+        self.gripper_target += float(np.clip(np.clip(grip, 0., 1.) - self.gripper_target, -grip_step, grip_step))
         self.backend.command(ref, self.gripper_target)
         return {'q_ref': ref.copy(), 'constraints': ['leader_trial'], 'target_position': state['tcp'].copy(),
                 'target_rotation': state['rotation'].copy(), 'error_m': 0., 'error_rad': 0.,

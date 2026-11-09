@@ -118,6 +118,22 @@ class LeaderSerialTests(unittest.TestCase):
             reader.close()
         self.assertTrue(device.closed)
 
+    def test_stop_during_query_interval_sends_no_more_commands(self):
+        device = FakeSerial()
+        reader = LeaderReader('test')
+
+        def stop_during_sleep(seconds):
+            self.assertEqual(seconds, 0.005)
+            reader._stop.set()
+
+        with patch('arm_teleop.leader_serial.serial.Serial', return_value=device), \
+             patch('arm_teleop.leader_serial.time.sleep', side_effect=stop_during_sleep):
+            reader._run()
+        self.assertEqual(device.writes, [_query(0)])
+        self.assertTrue(device.closed)
+        self.assertIsNone(reader.latest())
+        self.assertIsNone(reader.error)
+
     def test_open_failure_reported(self):
         with patch('arm_teleop.leader_serial.serial.Serial', side_effect=OSError('unavailable')):
             reader = LeaderReader('test').start()
