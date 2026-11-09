@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Gamepad-driven Cartesian arm teleoperation with MuJoCo dynamics"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24,<3", "mujoco>=3.2,<4"]
+dependencies = ["numpy>=1.24,<3", "mujoco>=3.2,<4", "pyserial>=3.5,<4"]
 
 [project.scripts]
 arm-teleop = "arm_teleop.server:main"

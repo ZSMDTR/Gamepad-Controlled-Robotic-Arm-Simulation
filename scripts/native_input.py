@@ -36,7 +36,7 @@ def primary_axis(values):
 
 class RecordCommands:
     """Emit one recording command per press while a viewer has focus."""
-    COMMANDS = (('F8', 'start'), ('F9', 'success'), ('F10', 'failure'))
+    COMMANDS = (('F8', 'start'), ('F9', 'success'), ('F10', 'failure'), ('F11', 'leader_toggle'))
 
     def __init__(self):
         self.focused = False
@@ -147,7 +147,7 @@ class WindowsKeyboard:
         if not hwnd or pid.value != os.getpid():
             return False, set()
         keys = {key for key in 'WASDQEIKLJOUZX' if self.user.GetAsyncKeyState(ord(key)) & 0x8000}
-        keys.update(name for name, code in (('F8', 0x77), ('F9', 0x78), ('F10', 0x79))
+        keys.update(name for name, code in (('F8', 0x77), ('F9', 0x78), ('F10', 0x79), ('F11', 0x7a))
                     if self.user.GetAsyncKeyState(code) & 0x8000)
         if self.user.GetAsyncKeyState(0x10) & 0x8000:
             keys.add('SHIFT')
@@ -218,7 +218,7 @@ class X11Keyboard:
             code = self.x.XKeysymToKeycode(self.display, keysym)
             return bool(code and keymap.raw[code // 8] & (1 << (code % 8)))
         keys = {key for key in 'WASDQEIKLJOUZX' if down(ord(key.lower()))}
-        keys.update(name for name, keysym in (('F8', 0xffc5), ('F9', 0xffc6), ('F10', 0xffc7))
+        keys.update(name for name, keysym in (('F8', 0xffc5), ('F9', 0xffc6), ('F10', 0xffc7), ('F11', 0xffc8))
                     if down(keysym))
         if down(0xffe1) or down(0xffe2):
             keys.add('SHIFT')

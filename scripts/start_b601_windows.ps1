@@ -1,3 +1,5 @@
+param([string]$LeaderPort = '')
+
 $project = Split-Path -Parent $PSScriptRoot
 if ($project -match '[^\x00-\x7F]') {
     Write-Host 'MuJoCo may fail to load models from paths containing non-ASCII characters.'
@@ -56,7 +58,7 @@ def version(name):
 assert (1, 24) <= version('numpy') < (3, 0)
 assert (3, 2) <= version('mujoco') < (4, 0)
 m.version('arm-teleop-sdls')
-import numpy, mujoco, arm_teleop, optimized_algorithm
+import numpy, mujoco, serial, arm_teleop, optimized_algorithm
 '@
 & $python -c $check 2>$null
 if ($LASTEXITCODE -ne 0) {
@@ -84,5 +86,9 @@ if (!(Test-Path -LiteralPath $model)) {
 
 Write-Host 'Starting the B601-RS MuJoCo practice scene.'
 Write-Host 'Keep this window open. Use the MuJoCo window to control the arm; close it to stop.'
-& $python (Join-Path $PSScriptRoot 'native_viewer.py') --robot b601_rs
+if ($LeaderPort) {
+    & $python (Join-Path $PSScriptRoot 'native_viewer.py') --robot b601_rs --leader-port $LeaderPort --leader-config (Join-Path $project 'leader-b601-rs.json')
+} else {
+    & $python (Join-Path $PSScriptRoot 'native_viewer.py') --robot b601_rs
+}
 exit $LASTEXITCODE

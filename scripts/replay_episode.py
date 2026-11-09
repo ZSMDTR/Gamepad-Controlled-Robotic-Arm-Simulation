@@ -67,6 +67,22 @@ def _validate_action(action):
         raise ValueError('动作 enabled 必须是布尔值')
     if type(action.get('gripper')) is not int or action['gripper'] not in (-1, 0, 1):
         raise ValueError('动作 gripper 必须是 -1、0 或 1')
+    source = action.get('source', 'manual')
+    if source not in ('manual', 'leader'):
+        raise ValueError('动作来源不受支持')
+    if source == 'leader':
+        sample = action.get('leader_sample')
+        if sample is None:
+            if action['enabled']:
+                raise ValueError('启用的主臂动作缺少关节读数')
+        else:
+            try:
+                positions = np.asarray(sample['positions'], dtype=float)
+                timestamp = float(sample['timestamp'])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError('主臂读数无效') from exc
+            if positions.shape != (7,) or not np.isfinite(positions).all() or not math.isfinite(timestamp):
+                raise ValueError('主臂读数必须包含 7 个有限角度和有效时间')
 
 
 def inspect_episode(path):

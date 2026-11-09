@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scripts.native_input import InputMapper, NativeInput, RecordCommands, WindowsKeyboard
+from scripts.native_input import InputMapper, NativeInput, RecordCommands, WindowsKeyboard, X11Keyboard
 
 
 class NativeInputTest(unittest.TestCase):
@@ -21,17 +21,38 @@ class NativeInputTest(unittest.TestCase):
         self.assertEqual(commands.sample(True, {'F8'}), ['start'])
         self.assertEqual(commands.sample(True, {'F9'}), ['success'])
         self.assertEqual(commands.sample(True, {'F10'}), ['failure'])
+        self.assertEqual(commands.sample(True, {'F11'}), ['leader_toggle'])
+        self.assertEqual(commands.sample(True, {'F11'}), [])
+        self.assertEqual(commands.sample(False, {'F11'}), [])
+        self.assertEqual(commands.sample(True, {'F11'}), [])
+        self.assertEqual(commands.sample(True, set()), [])
+        self.assertEqual(commands.sample(True, {'F11'}), ['leader_toggle'])
 
     def test_windows_reads_record_keys_while_focused(self):
         user = MagicMock()
         user.GetForegroundWindow.return_value = 101
         user.GetWindowThreadProcessId.side_effect = lambda _, process: setattr(
             ctypes.cast(process, ctypes.POINTER(ctypes.c_ulong)).contents, 'value', os.getpid())
-        user.GetAsyncKeyState.side_effect = lambda key: 0x8000 if key in (0x77, 0x78, 0x79) else 0
+        user.GetAsyncKeyState.side_effect = lambda key: 0x8000 if key in (0x77, 0x78, 0x79, 0x7a) else 0
         with patch.object(ctypes, 'WinDLL', return_value=user, create=True):
             focused, keys = WindowsKeyboard().read()
         self.assertTrue(focused)
-        self.assertTrue({'F8', 'F9', 'F10'}.issubset(keys))
+        self.assertTrue({'F8', 'F9', 'F10', 'F11'}.issubset(keys))
+
+    def test_x11_reads_f11_while_focused(self):
+        keyboard = X11Keyboard.__new__(X11Keyboard)
+        keyboard.x = MagicMock()
+        keyboard.display, keyboard.atom = 1, 1
+        keyboard._owned = lambda _: True
+        keyboard.x.XKeysymToKeycode.side_effect = lambda _, keysym: 42 if keysym == 0xffc8 else 0
+        def set_keymap(_, keymap):
+            data = bytearray(32)
+            data[42 // 8] |= 1 << (42 % 8)
+            ctypes.memmove(keymap, bytes(data), len(data))
+        keyboard.x.XQueryKeymap.side_effect = set_keymap
+        focused, keys = keyboard.read()
+        self.assertTrue(focused)
+        self.assertIn('F11', keys)
 
     def test_poll_exposes_record_commands_and_drops_them_on_focus_loss(self):
         inputs = NativeInput.__new__(NativeInput)

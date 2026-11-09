@@ -25,6 +25,7 @@ from .recorder import capture_state
 
 DT = 0.01
 INPUT_TIMEOUT = 0.25
+LEADER_TIMEOUT = 0.5
 STATIC = Path(__file__).parent / "static"
 
 
@@ -45,6 +46,25 @@ def input_vector(value):
     return [float(x) for x in value]
 
 
+def leader_configuration(config):
+    """Validate the user-editable experimental mapping before connecting."""
+    if not isinstance(config, dict) or set(config) != {'joint_indices', 'joint_scales', 'gripper_scale'}:
+        raise ValueError('leader config requires joint_indices, joint_scales and gripper_scale')
+    indices = config['joint_indices']
+    scales = config['joint_scales']
+    grip = config['gripper_scale']
+    if (not isinstance(indices, list) or len(indices) != 6 or
+            any(type(x) is not int for x in indices) or set(indices) != set(range(6))):
+        raise ValueError('joint_indices must be a permutation of 0..5')
+    if (not isinstance(scales, list) or len(scales) != 6 or
+            any(isinstance(x, bool) or not isinstance(x, (int, float)) or
+                not math.isfinite(x) or abs(x) > 2 for x in scales) or
+            isinstance(grip, bool) or not isinstance(grip, (int, float)) or
+            not math.isfinite(grip) or abs(grip) > 2):
+        raise ValueError('joint_scales and gripper_scale must be finite numbers in [-2, 2]')
+    return {'joint_indices': list(indices), 'joint_scales': list(scales), 'gripper_scale': grip}
+
+
 class Simulation:
     """One physics owner thread; commands and snapshots are protected by a lock."""
     def __init__(self):
@@ -53,6 +73,17 @@ class Simulation:
         self._native_previous_rotation = np.zeros(3)
         self.recorder = None
         self.recording_error = None
+        self.leader_active = False
+        self.leader_sample = None
+        self.leader_config = None
+        self.leader_origin = None
+        self.leader_unwrapped = None
+        self.leader_read_error = None
+        self.leader_q_origin = None
+        self.leader_ref = None
+        self.leader_velocity = None
+        self.leader_gripper_origin = None
+        self.leader_status = 'OFF'
         self.stop_event = threading.Event()
         self.method = "dls"
         self.elbow_weight = .35
@@ -102,6 +133,95 @@ class Simulation:
             self.gripper_input = gripper
             self.enabled = body["enabled"] and not self.needs_release and self.fault is None
             self.last_input = time.monotonic()
+
+    @staticmethod
+    def _leader_values(sample, now):
+        try:
+            positions = np.asarray(sample.positions, dtype=float)
+            timestamp = float(sample.timestamp)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if (positions.shape != (7,) or not np.isfinite(positions).all()
+                or not math.isfinite(timestamp) or timestamp > now + .01
+                or now - timestamp > LEADER_TIMEOUT):
+            return None
+        return positions.copy(), timestamp
+
+    def start_leader(self, sample, config, now):
+        """Arm relative following only after a fresh read and explicit toggle."""
+        values = self._leader_values(sample, now)
+        config = leader_configuration(config)
+        scales = np.asarray(config['joint_scales'], dtype=float)
+        indices = np.asarray(config['joint_indices'])
+        grip_scale = float(config['gripper_scale'])
+        if len(self.backend.qpos_ids) != 6:
+            raise ValueError('leader trial supports six-joint robots only')
+        if values is None:
+            self.leader_status = 'NO FRESH DATA'
+            return False
+        with self.lock:
+            if self.fault is not None:
+                self.leader_status = 'SIMULATION FAULT'
+                return False
+            s = self.backend.state()
+            self.controller.reset()
+            self.leader_config = {'joint_indices': indices.copy(), 'joint_scales': scales.copy(), 'gripper_scale': grip_scale}
+            self.leader_origin = values[0]
+            self.leader_sample = values
+            self.leader_unwrapped = values[0].copy()
+            self.leader_read_error = None
+            self.leader_q_origin = s['q'].copy()
+            self.leader_ref = s['q'].copy()
+            self.leader_velocity = np.zeros(6)
+            self.leader_gripper_origin = float(s['gripper_position'])
+            self.gripper_target = self.leader_gripper_origin
+            self.leader_active = True
+            self.leader_status = 'ON - TRIAL'
+        return True
+
+    def set_leader_sample(self, sample, now):
+        values = self._leader_values(sample, now)
+        with self.lock:
+            if values is not None and self.leader_sample is not None:
+                if values[1] < self.leader_sample[1]:
+                    self.leader_read_error = 'OUT OF ORDER'
+                elif values[1] > self.leader_sample[1]:
+                    delta = (values[0] - self.leader_sample[0] + np.pi) % (2 * np.pi) - np.pi
+                    if np.any(np.abs(delta) > np.deg2rad(25)):
+                        self.leader_read_error = 'JUMP'
+                    else:
+                        self.leader_unwrapped += delta
+            self.leader_sample = values
+
+    def stop_leader(self, reason='OFF'):
+        with self.lock:
+            self.leader_active = False
+            self.leader_status = reason
+            self.leader_sample = None
+            self.leader_read_error = None
+            self.controller.reset()
+
+    def _leader_command(self, state, positions):
+        """Relative joint trial with low speed, acceleration and lead limits."""
+        spec = self.backend.spec
+        indices = self.leader_config['joint_indices']
+        desired = np.clip(self.leader_q_origin + (positions[indices] - self.leader_origin[indices]) *
+                          self.leader_config['joint_scales'], spec['lower'], spec['upper'])
+        vmax = np.minimum(spec['velocity_limit'], .1)
+        amax = np.minimum(spec['acceleration_limit'], .5)
+        wanted = np.clip((desired - self.leader_ref) / DT, -vmax, vmax)
+        velocity = np.clip(wanted, self.leader_velocity - amax * DT, self.leader_velocity + amax * DT)
+        ref = self.leader_ref + velocity * DT
+        ref = np.clip(ref, np.maximum(spec['lower'], state['q'] - .03),
+                      np.minimum(spec['upper'], state['q'] + .03))
+        self.leader_velocity = (ref - self.leader_ref) / DT
+        self.leader_ref = ref
+        grip = self.leader_gripper_origin + (positions[6] - self.leader_origin[6]) * self.leader_config['gripper_scale']
+        self.gripper_target += float(np.clip(np.clip(grip, 0., 1.) - self.gripper_target, -.2 * DT, .2 * DT))
+        self.backend.command(ref, self.gripper_target)
+        return {'q_ref': ref.copy(), 'constraints': ['leader_trial'], 'target_position': state['tcp'].copy(),
+                'target_rotation': state['rotation'].copy(), 'error_m': 0., 'error_rad': 0.,
+                'mode': 'leader_trial', 'solve_ms': 0.}
 
     def configure(self, body):
         if not body or not set(body) <= {"method", "elbow_weight", "robot"}:
@@ -191,7 +311,17 @@ class Simulation:
     def tick(self, start, deadline):
         """Advance one control period. The caller supplies any viewer lock."""
         with self.lock:
+            leader_mode = self.leader_active
+            leader_sample = self.leader_sample
+            leader_fresh = (leader_sample is not None and self.leader_read_error is None and
+                            0 <= start - leader_sample[1] <= LEADER_TIMEOUT)
+            if leader_mode and (not leader_fresh or start - deadline > INPUT_TIMEOUT):
+                self.leader_active = False
+                self.leader_status = f'{self.leader_read_error or "STALE"} - PRESS F11'
+                self.controller.reset()
             active = self.enabled and start - self.last_input <= INPUT_TIMEOUT and self.fault is None
+            if leader_mode:
+                active = bool(self.leader_active and self.fault is None)
             if start - self.last_input > INPUT_TIMEOUT and self.enabled:
                 self.enabled = False
                 self.needs_release = True
@@ -209,30 +339,37 @@ class Simulation:
             try:
                 if self.fault is None:
                     s = self.backend.state()
-                    if self.native_hold_on_release:
-                        rotation = np.asarray(self.rotation_input) if active else np.zeros(3)
-                        # Re-anchor on release, reversal or a change of rotation
-                        # axis so a previous angular target cannot keep driving.
-                        changed_rotation = (np.any(self._native_previous_rotation)
-                                            and np.dot(self._native_previous_rotation, rotation) <= 0)
-                        if not active and self.controller.was_enabled:
-                            self.controller.reset()
-                        elif changed_rotation:
-                            # Keep joint-reference continuity while discarding
-                            # the old angular target once at the input edge.
-                            self.controller.target_rotation = s['rotation'].copy()
-                        self._native_previous_rotation = rotation.copy()
-                    r = self.controller.step(s["q"], s["qvel"], s["tcp"], s["rotation"], s["jacobian"],
-                                             self.direction, self.rotation_input, bool(active), DT)
-                    if active:
-                        self.gripper_target = float(np.clip(self.gripper_target + self.gripper_input * .55 * DT, 0, 1))
-                    self.backend.command(r["q_ref"], self.gripper_target)
-                    self.result = r
+                    if leader_mode:
+                        if active:
+                            r = self._leader_command(s, self.leader_unwrapped)
+                        else:
+                            self.backend.command(s['q'], self.gripper_target)
+                        self.result = r
+                    else:
+                        if self.native_hold_on_release:
+                            rotation = np.asarray(self.rotation_input) if active else np.zeros(3)
+                            # Re-anchor on release, reversal or a change of rotation
+                            # axis so a previous angular target cannot keep driving.
+                            changed_rotation = (np.any(self._native_previous_rotation)
+                                                and np.dot(self._native_previous_rotation, rotation) <= 0)
+                            if not active and self.controller.was_enabled:
+                                self.controller.reset()
+                            elif changed_rotation:
+                                self.controller.target_rotation = s['rotation'].copy()
+                            self._native_previous_rotation = rotation.copy()
+                        r = self.controller.step(s["q"], s["qvel"], s["tcp"], s["rotation"], s["jacobian"],
+                                                 self.direction, self.rotation_input, bool(active), DT)
+                        if active:
+                            self.gripper_target = float(np.clip(self.gripper_target + self.gripper_input * .55 * DT, 0, 1))
+                        self.backend.command(r["q_ref"], self.gripper_target)
+                        self.result = r
                 self.backend.step(self.physics_steps, return_state=False)
             except Exception as exc:
                 self.fault = f"{type(exc).__name__}: {exc}"
                 self.enabled = False
                 self.needs_release = True
+                self.leader_active = False
+                self.leader_status = 'SIMULATION FAULT'
                 # Stop issuing the old moving reference, then keep physics alive.
                 s = self.backend.state()
                 self.backend.command(s["q"], self.gripper_target)
@@ -251,6 +388,11 @@ class Simulation:
                               'gripper_target': self.gripper_target,
                               'constraints': [] if r is None else list(r['constraints']),
                               'fault': self.fault}
+                    if leader_mode:
+                        action.update(source='leader', direction=[0.] * 3, rotation=[0.] * 3,
+                                      gripper=0, input_stale=not leader_fresh,
+                                      leader_sample=None if leader_sample is None else
+                                      {'positions': leader_sample[0].copy(), 'timestamp': leader_sample[1]})
                     self.recorder.append(recorded_before, action, capture_state(self))
                 except Exception as exc:
                     # Data collection must not interrupt mechanical control.

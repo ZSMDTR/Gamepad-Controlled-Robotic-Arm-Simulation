@@ -1,6 +1,7 @@
 """Run the native MuJoCo practice window, optionally with the legacy web UI."""
 import argparse
 import copy
+import json
 from pathlib import Path
 import sys
 import threading
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mujoco
 import mujoco.viewer
 
-from arm_teleop.server import DT, Server, Simulation, physics_steps
+from arm_teleop.server import DT, Server, Simulation, leader_configuration, physics_steps
 from arm_teleop.mujoco_backend import MujocoBackend, available_models
 from arm_teleop.b601_scene import make_b601_scene_profile
 from arm_teleop.recorder import EpisodeRecorder, recording_metadata
@@ -102,7 +103,7 @@ def sync_auxiliary_view(viewer, model, data, axes, simulation):
     viewer.sync()
 
 
-def show_native_viewer(simulation):
+def show_native_viewer(simulation, reader=None, leader_config=None):
     """Use the actual physics data, synchronizing viewer and physics access."""
     inputs = NativeInput()
     try:
@@ -120,6 +121,8 @@ def show_native_viewer(simulation):
             arrange_viewers(main_windows, viewer_windows())
             scene = 'b601_practice' if simulation.backend.name == 'b601_rs' else 'robot_only'
             metadata = recording_metadata(simulation, scene, DT)
+            if reader is not None:
+                metadata['leader_calibration'] = leader_config
             record_status = 'READY'
             set_recording_text(viewer, 'MAIN VIEW', record_status)
             set_recording_text(auxiliary, 'AUX VIEW', record_status)
@@ -128,12 +131,19 @@ def show_native_viewer(simulation):
             print('Shift + I/K, J/L, U/O: rotate about world X/Y/Z; Z/X: gripper.', flush=True)
             print('Gamepad: hold LB, move one stick axis; hold RB for rotation; A/B: gripper.', flush=True)
             print(f'F8 start recording; F9 save success; F10 save failure. Data: {RECORDING_DIR}', flush=True)
+            if reader is not None:
+                print('F11: toggle experimental leader following. Joint and gripper mappings require physical verification.', flush=True)
             try:
                 deadline = time.monotonic()
                 next_sync = deadline
                 last_status_update = deadline
+                suppress_manual = False
                 while viewer.is_running():
                     sample = inputs.poll()
+                    if (reader is not None and simulation.leader_active and
+                            not inputs.record_commands.focused):
+                        simulation.stop_leader('FOCUS LOST - PRESS F11')
+                        suppress_manual = True
                     for command in inputs.pop_commands():
                         if command == 'start' and simulation.recorder is None:
                             try:
@@ -146,21 +156,40 @@ def show_native_viewer(simulation):
                                 print(f'Cannot start recording: {type(exc).__name__}: {exc}', flush=True)
                         elif command in ('success', 'failure'):
                             record_status = finish_recording(simulation, command, 'user_label')
+                        elif command == 'leader_toggle' and reader is not None:
+                            if simulation.leader_active:
+                                simulation.stop_leader()
+                            else:
+                                simulation.start_leader(reader.latest(), leader_config, time.monotonic())
+                            suppress_manual = True
+                            print(f'Leader: {simulation.leader_status}', flush=True)
                         set_recording_text(viewer, 'MAIN VIEW', record_status)
                         set_recording_text(auxiliary, 'AUX VIEW', record_status)
+                    if simulation.leader_active:
+                        simulation.set_leader_sample(reader.latest(), time.monotonic())
+                        sample = disabled()
+                    elif suppress_manual:
+                        if not sample['enabled']:
+                            suppress_manual = False
+                        sample = disabled()
                     simulation.set_input(sample)
                     start = time.monotonic()
+                    was_leader = simulation.leader_active
                     simulation.tick(start, deadline)
+                    if was_leader and not simulation.leader_active:
+                        suppress_manual = True
                     if simulation.recorder is not None and simulation.recording_error:
                         print(f'Recording stopped: {simulation.recording_error}', flush=True)
                         finish_recording(simulation, 'interrupted', 'recording_error')
                         record_status = 'ERROR - see terminal'
                         set_recording_text(viewer, 'MAIN VIEW', record_status)
                         set_recording_text(auxiliary, 'AUX VIEW', record_status)
-                    if simulation.recorder is not None and start - last_status_update >= .5:
-                        record_status = f'REC {simulation.recorder.steps}'
-                        set_recording_text(viewer, 'MAIN VIEW', record_status)
-                        set_recording_text(auxiliary, 'AUX VIEW', record_status)
+                    if start - last_status_update >= .5:
+                        if simulation.recorder is not None:
+                            record_status = f'REC {simulation.recorder.steps}'
+                        status = record_status if reader is None else f'{record_status} | LEADER {simulation.leader_status}'
+                        set_recording_text(viewer, 'MAIN VIEW', status)
+                        set_recording_text(auxiliary, 'AUX VIEW', status)
                         last_status_update = start
                     if start >= next_sync:
                         update_tcp_axes(viewer.user_scn, axes,
@@ -193,7 +222,13 @@ def main():
     parser.add_argument("--port", type=int, default=8002)
     parser.add_argument("--robot", default="ur5e", help="robot profile name (default: ur5e)")
     parser.add_argument("--open-browser", action="store_true", help="open the browser control page")
+    parser.add_argument("--leader-port", help="experimental read-only leader serial port, e.g. COM7")
+    parser.add_argument("--leader-config", type=Path, help="JSON mapping for experimental leader following")
     args = parser.parse_args()
+    if args.leader_config and not args.leader_port:
+        parser.error('--leader-config requires --leader-port')
+    if args.open_browser and args.leader_port:
+        parser.error('--leader-port is supported in the native viewer only')
     if not 1 <= args.port <= 65535:
         parser.error("port must be in [1, 65535]")
     if args.robot not in available_models():
@@ -212,7 +247,24 @@ def main():
             simulation.elbow_weight = 0.
             simulation.controller = make_native_controller(simulation.backend.spec)
             try:
-                show_native_viewer(simulation)
+                if args.leader_port:
+                    from arm_teleop.leader_serial import LeaderReader
+                    config = {'joint_indices': list(range(6)), 'joint_scales': [1., 1., -1., -1., -1., 1.], 'gripper_scale': 1.2}
+                    try:
+                        if args.leader_config:
+                            with args.leader_config.open(encoding='utf-8') as stream:
+                                config = json.load(stream)
+                        config = leader_configuration(config)
+                    except (OSError, ValueError) as exc:
+                        parser.error(f'invalid leader configuration: {exc}')
+                    reader = LeaderReader(args.leader_port)
+                    try:
+                        reader.start()
+                        show_native_viewer(simulation, reader, config)
+                    finally:
+                        reader.close()
+                else:
+                    show_native_viewer(simulation)
             except KeyboardInterrupt:
                 pass
         return

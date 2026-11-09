@@ -37,14 +37,14 @@ if ! "$PYTHON" -c 'import os, sys; sys.exit(not os.path.samefile(sys.prefix, ".v
   echo 'The existing .venv points to a different environment. Move it aside and retry to create a local one.' >&2
   exit 1
 fi
-if ! "$PYTHON" -m pip show arm-teleop-sdls >/dev/null 2>&1 || ! "$PYTHON" -m pip check >/dev/null 2>&1 || ! "$PYTHON" -c 'import numpy, mujoco' >/dev/null 2>&1; then
+if ! "$PYTHON" -m pip show arm-teleop-sdls >/dev/null 2>&1 || ! "$PYTHON" -m pip check >/dev/null 2>&1 || ! "$PYTHON" -c 'import numpy, mujoco, serial' >/dev/null 2>&1; then
   echo 'Installing project dependencies (internet access required on the first run)...'
   if ! "$PYTHON" -m pip install -e .; then
     echo 'Dependency installation failed. Check internet access and Python/venv support, then retry.' >&2
     exit 1
   fi
 fi
-if ! "$PYTHON" -c 'import numpy, mujoco' >/dev/null 2>&1; then
+if ! "$PYTHON" -c 'import numpy, mujoco, serial' >/dev/null 2>&1; then
   echo 'Dependencies are installed but cannot be loaded. Move .venv aside and retry.' >&2
   exit 1
 fi
@@ -62,4 +62,4 @@ fi
 
 echo 'Opening the B601-RS MuJoCo practice scene.'
 echo 'Keep this terminal open. Control the arm in the MuJoCo window.'
-exec "$PYTHON" scripts/native_viewer.py --robot b601_rs
+exec "$PYTHON" scripts/native_viewer.py --robot b601_rs "$@"
