@@ -10,6 +10,72 @@ class NativeInputTest(unittest.TestCase):
     def setUp(self):
         self.mapper = InputMapper()
 
+    def test_keyboard_and_pad_share_control_without_held_takeover(self):
+        buttons = [0] * 15
+        axes = [0.] * 4
+        pad = (0, axes, buttons)
+        sample = self.mapper.sample
+        sample(True, set(), pad)
+        axes[1] = -1.
+        self.assertEqual(sample(True, {'SHIFT', 'A'}, pad)['direction'], [0, 1, 0])
+        buttons[4] = 1
+        self.assertEqual(sample(True, {'SHIFT', 'A'}, pad)['direction'], [0, 1, 0])
+        self.assertFalse(sample(True, set(), pad)['enabled'])  # held LB cannot take over
+        buttons[4] = 0
+        sample(True, set(), pad)
+        buttons[4] = 1
+        self.assertGreater(sample(True, set(), pad)['direction'][0], 0)
+        self.assertGreater(sample(True, {'SHIFT', 'A'}, pad)['direction'][0], 0)
+        buttons[4] = 0
+        self.assertFalse(sample(True, {'SHIFT', 'A'}, pad)['enabled'])
+        sample(True, set(), pad)
+        self.assertEqual(sample(True, {'SHIFT', 'A'}, pad)['direction'], [0, 1, 0])
+
+    def test_focus_and_hotplug_require_release_of_each_deadman(self):
+        buttons = [0] * 15
+        pad = (0, [0., 0., 0., 0.], buttons)
+        sample = self.mapper.sample
+        sample(True, set(), None)
+        sample(True, {'SHIFT', 'W'}, None)
+        self.assertFalse(sample(True, {'SHIFT', 'W'}, pad)['enabled'])
+        sample(True, set(), pad)
+        self.assertTrue(sample(True, {'SHIFT', 'W'}, pad)['enabled'])
+        sample(False, {'SHIFT', 'W'}, pad)
+        self.assertFalse(sample(True, {'SHIFT', 'W'}, pad)['enabled'])
+        sample(True, set(), pad)
+        buttons[4] = 1
+        self.assertTrue(sample(True, set(), pad)['enabled'])
+        self.assertFalse(sample(True, {'SHIFT', 'W'}, None)['enabled'])
+        sample(True, set(), None)
+        self.assertTrue(sample(True, {'SHIFT', 'W'}, None)['enabled'])
+
+    def test_manual_released_checks_all_gamepads_and_focus(self):
+        inputs = NativeInput.__new__(NativeInput)
+        inputs.keyboard = MagicMock()
+        inputs.mapper = InputMapper()
+        inputs.record_commands = RecordCommands()
+        inputs._commands = []
+        inputs.keyboard.read.return_value = (True, set())
+        first, second = MagicMock(), MagicMock()
+        first.axes, first.buttons = [0.] * 4, [0] * 15
+        second.axes, second.buttons = [0.] * 4, [0] * 15
+        with patch('scripts.native_input.glfw.poll_events'), \
+             patch('scripts.native_input.glfw.joystick_present', side_effect=lambda i: i in (0, 1)), \
+             patch('scripts.native_input.glfw.joystick_is_gamepad', return_value=True), \
+             patch('scripts.native_input.glfw.get_gamepad_state', side_effect=lambda i: (first, second)[i]):
+            inputs.poll()
+            self.assertTrue(inputs.manual_released)
+            second.buttons[4] = 1
+            inputs.poll()
+            self.assertFalse(inputs.manual_released)
+            second.buttons[4] = 0
+            inputs.keyboard.read.return_value = (True, {'SHIFT'})
+            inputs.poll()
+            self.assertFalse(inputs.manual_released)
+            inputs.keyboard.read.return_value = (False, set())
+            inputs.poll()
+            self.assertFalse(inputs.manual_released)
+
     def test_record_keys_are_single_press_and_rearm_after_focus(self):
         commands = RecordCommands()
         self.assertEqual(commands.sample(True, set()), [])

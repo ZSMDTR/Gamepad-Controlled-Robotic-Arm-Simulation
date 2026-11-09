@@ -169,7 +169,9 @@ def show_native_viewer(simulation, reader=None, leader_config=None):
                         simulation.set_leader_sample(reader.latest(), time.monotonic())
                         sample = disabled()
                     elif suppress_manual:
-                        if not sample['enabled']:
+                        # A disabled sample alone may hide a held deadman from
+                        # another input device. Require both devices released.
+                        if inputs.manual_released:
                             suppress_manual = False
                         sample = disabled()
                     simulation.set_input(sample)

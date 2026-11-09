@@ -59,8 +59,8 @@ class RecordCommands:
         return commands
 
 
-class InputMapper:
-    """Fail-closed focus/deadman state and browser-compatible gamepad mapping."""
+class _SingleInputMapper:
+    """Fail-closed state for one keyboard or gamepad source."""
     def __init__(self):
         self.source = None
         self.needs_release = True
@@ -130,6 +130,55 @@ class InputMapper:
         return dict(direction=unit([pair('W', 'S'), pair('A', 'D'), pair('Q', 'E')]),
                     rotation=unit([pair('I', 'K'), pair('J', 'L'), pair('U', 'O')]),
                     gripper=int('Z' in keys) - int('X' in keys), enabled=True)
+
+
+class InputMapper:
+    """Arbitrate two independent deadmen without changing a held source."""
+    def __init__(self):
+        self.keyboard = _SingleInputMapper()
+        self.gamepad = _SingleInputMapper()
+        self.pad_id = None
+        self.owner = None
+        self.blocked = set()
+        self.all_released = True
+
+    def sample(self, focused, keys, pad):
+        pad_id = pad[0] if pad else None
+        keyboard_down = 'SHIFT' in keys
+        pad_down = bool(pad and pad[2][4])
+        self.all_released = not keyboard_down and not pad_down
+        if not focused or pad_id != self.pad_id:
+            # Disconnect, replacement, focus loss, and hot-plug invalidate both
+            # deadmen. Neither a held Shift nor LB may take over unexpectedly.
+            self.keyboard.sample(False, set(), None)
+            self.gamepad.sample(False, set(), None)
+            self.owner = None
+            self.blocked.clear()
+            self.pad_id = pad_id
+        keyboard = self.keyboard.sample(focused, keys, None)
+        gamepad = self.gamepad.sample(focused and pad is not None, set(), pad)
+        if not focused:
+            return disabled()
+        if not keyboard_down:
+            self.blocked.discard('keyboard')
+        if not pad_down:
+            self.blocked.discard('gamepad')
+        samples = {'keyboard': keyboard, 'gamepad': gamepad}
+        down = {'keyboard': keyboard_down, 'gamepad': pad_down}
+        if self.owner is not None and not samples[self.owner]['enabled']:
+            self.owner = None
+        if self.owner is None:
+            # Simultaneous fresh presses select the gamepad deterministically.
+            for source in ('gamepad', 'keyboard'):
+                if samples[source]['enabled'] and source not in self.blocked:
+                    self.owner = source
+                    break
+        if self.owner is None:
+            return disabled()
+        other = 'keyboard' if self.owner == 'gamepad' else 'gamepad'
+        if down[other]:
+            self.blocked.add(other)
+        return samples[self.owner]
 
 
 class WindowsKeyboard:
@@ -243,6 +292,7 @@ class NativeInput:
         self.mapper = InputMapper()
         self.record_commands = RecordCommands()
         self._commands = []
+        self.manual_released = False
 
     def poll(self):
         # Process joystick hot-plug notifications on the initializing thread.
@@ -252,12 +302,15 @@ class NativeInput:
             self._commands.clear()
         self._commands.extend(self.record_commands.sample(focused, keys))
         pad = None
+        any_pad_deadman = False
         for joystick in range(glfw.JOYSTICK_1, glfw.JOYSTICK_LAST + 1):
             if glfw.joystick_present(joystick) and glfw.joystick_is_gamepad(joystick):
                 state = glfw.get_gamepad_state(joystick)
                 if state:
-                    pad = (joystick, state.axes, state.buttons)
-                    break
+                    any_pad_deadman |= bool(state.buttons[4])
+                    if pad is None:
+                        pad = (joystick, state.axes, state.buttons)
+        self.manual_released = focused and 'SHIFT' not in keys and not any_pad_deadman
         return self.mapper.sample(focused, keys, pad)
 
     def pop_commands(self):

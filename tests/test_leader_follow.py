@@ -129,6 +129,7 @@ class LeaderFollowTest(unittest.TestCase):
 
         class Inputs:
             record_commands = SimpleNamespace(focused=True)
+            manual_released = False
             def poll(self):
                 count['n'] += 1
                 self.record_commands.focused = count['n'] == 1
@@ -159,6 +160,55 @@ class LeaderFollowTest(unittest.TestCase):
         self.assertFalse(events[1][0])
         self.assertFalse(events[1][1])
         self.assertIn('FOCUS LOST', events[1][2])
+
+    def test_viewer_requires_both_manual_deadmen_released_after_leader_stops(self):
+        for reason in ('toggle', 'focus', 'stale'):
+            with self.subTest(reason=reason):
+                sim = Simulation()
+                events, count = [], {'n': 0}
+
+                class Inputs:
+                    record_commands = SimpleNamespace(focused=True)
+                    manual_released = True
+
+                    def poll(self):
+                        count['n'] += 1
+                        n = count['n']
+                        self.record_commands.focused = not (reason == 'focus' and n == 2)
+                        # n=3: both held; n=4 and n=5: only one held;
+                        # n=6: both released. A disabled sample at n=3 can
+                        # hide a held deadman from a different device.
+                        self.manual_released = n in (1, 6)
+                        return {'direction': [1., 0., 0.], 'enabled': n in (4, 5, 7)}
+
+                    def pop_commands(self):
+                        n = count['n']
+                        return ['leader_toggle'] if n == 1 or (reason == 'toggle' and n == 2) else []
+
+                    def close(self): pass
+
+                class Reader:
+                    def latest(self): return sample([0.] * 7, time.monotonic())
+
+                class Viewer:
+                    user_scn = mujoco.MjvScene(sim.backend.model, maxgeom=50)
+                    def __enter__(self): return self
+                    def __exit__(self, *args): return False
+                    def is_running(self): return count['n'] < 7
+                    def sync(self): pass
+
+                def tick(start, deadline):
+                    events.append(sim.enabled)
+                    if reason == 'stale' and count['n'] == 2:
+                        sim.stop_leader('STALE - PRESS F11')
+
+                with patch('scripts.native_viewer.NativeInput', Inputs), \
+                     patch('scripts.native_viewer.prepare_auxiliary_view', return_value=(None, None, None, None)), \
+                     patch('scripts.native_viewer.viewer_windows', return_value=set()), \
+                     patch('scripts.native_viewer.mujoco.viewer.launch_passive', return_value=Viewer()), \
+                     patch.object(sim, 'tick', side_effect=tick):
+                    show_native_viewer(sim, Reader(), CONFIG)
+                self.assertEqual(events, [False] * 6 + [True])
 
 
 if __name__ == '__main__':
