@@ -19,6 +19,7 @@ from arm_teleop.b601_scene import make_b601_scene_profile
 from arm_teleop.world_axes import add_world_axes, update_tcp_axes
 from optimized_algorithm.native_control import make_native_controller
 from scripts.native_input import NativeInput, disabled
+from scripts.window_layout import arrange_viewers, viewer_windows
 
 
 def copy_view_data(simulation, model, data):
@@ -51,6 +52,30 @@ def show_viewer(simulation):
                 return
 
 
+def prepare_auxiliary_view(simulation):
+    """Create an independent display copy; it never advances physics."""
+    model = copy.copy(simulation.backend.model)
+    data = mujoco.MjData(model)
+    mujoco.mj_copyData(data, model, simulation.backend.data)
+    viewer = mujoco.viewer.launch_passive(model, data,
+                                          show_left_ui=False, show_right_ui=False)
+    viewer.cam.lookat[:] = [.35, 0, .27]
+    viewer.cam.distance = 1.3
+    viewer.cam.azimuth = 45
+    viewer.cam.elevation = -55
+    axes = add_world_axes(viewer.user_scn)
+    if hasattr(viewer, 'set_texts'):
+        viewer.set_texts((None, None, 'AUXILIARY VIEW - same simulation', ''))
+    return viewer, model, data, axes
+
+
+def sync_auxiliary_view(viewer, model, data, axes, simulation):
+    """Refresh the display from the one authoritative simulation."""
+    mujoco.mj_copyData(data, model, simulation.backend.data)
+    update_tcp_axes(viewer.user_scn, axes, data.site_xpos[simulation.backend.tcp_id])
+    viewer.sync()
+
+
 def show_native_viewer(simulation):
     """Use the actual physics data, synchronizing viewer and physics access."""
     inputs = NativeInput()
@@ -64,6 +89,12 @@ def show_native_viewer(simulation):
                 viewer.cam.azimuth = 135
                 viewer.cam.elevation = -25
             axes = add_world_axes(viewer.user_scn)
+            if hasattr(viewer, 'set_texts'):
+                viewer.set_texts((None, None, 'MAIN VIEW - control', ''))
+            main_windows = viewer_windows()
+            auxiliary, aux_model, aux_data, aux_axes = prepare_auxiliary_view(simulation)
+            arrange_viewers(main_windows, viewer_windows())
+            print('Two MuJoCo windows show the same simulation. Close the auxiliary view independently.', flush=True)
             print('Focus MuJoCo. Shift + W/S: forward/back; A/D: left/right; Q/E: up/down.', flush=True)
             print('Shift + I/K, J/L, U/O: rotate about world X/Y/Z; Z/X: gripper.', flush=True)
             print('Gamepad: hold LB, move one stick axis; hold RB for rotation; A/B: gripper.', flush=True)
@@ -78,6 +109,11 @@ def show_native_viewer(simulation):
                         update_tcp_axes(viewer.user_scn, axes,
                                         simulation.backend.data.site_xpos[simulation.backend.tcp_id])
                         viewer.sync()
+                        if auxiliary is not None:
+                            if auxiliary.is_running():
+                                sync_auxiliary_view(auxiliary, aux_model, aux_data, aux_axes, simulation)
+                            else:
+                                auxiliary = None
                         next_sync = start + 1 / 30
                     deadline += DT
                     now = time.monotonic()
@@ -85,6 +121,8 @@ def show_native_viewer(simulation):
                         deadline = now
                     time.sleep(max(0, deadline - time.monotonic()))
             finally:
+                if auxiliary is not None:
+                    auxiliary.close()
                 simulation.set_input(disabled())
                 simulation.close()
     finally:

@@ -1,6 +1,9 @@
+import ctypes
+import os
 import unittest
+from unittest.mock import MagicMock, patch
 
-from scripts.native_input import InputMapper
+from scripts.native_input import InputMapper, WindowsKeyboard
 
 
 class NativeInputTest(unittest.TestCase):
@@ -17,6 +20,55 @@ class NativeInputTest(unittest.TestCase):
         sample(True, set(), None)
         self.assertTrue(sample(True, {'SHIFT', 'W'}, None)['enabled'])
         self.assertFalse(sample(True, {'W'}, None)['enabled'])
+
+    def test_windows_focus_accepts_both_viewers_and_rearms_after_leaving(self):
+        user = MagicMock()
+        foreground = [101]
+        pressed = set()
+        user.GetForegroundWindow.side_effect = lambda: foreground[0]
+
+        def window_process(window, process):
+            pid = os.getpid() if window in (101, 102) else os.getpid() + 1
+            ctypes.cast(process, ctypes.POINTER(ctypes.c_ulong))[0] = pid
+
+        user.GetWindowThreadProcessId.side_effect = window_process
+        user.GetAsyncKeyState.side_effect = lambda key: 0x8000 if key in pressed else 0
+        with patch.object(ctypes, 'WinDLL', return_value=user, create=True):
+            keyboard = WindowsKeyboard()
+            sample = lambda: self.mapper.sample(*keyboard.read(), None)
+            self.assertFalse(sample()['enabled'])
+            pressed.update((0x10, ord('W')))
+            self.assertEqual(sample()['direction'], [1, 0, 0])
+            foreground[0] = 102  # The other viewer belongs to the same process.
+            self.assertEqual(sample()['direction'], [1, 0, 0])
+            foreground[0] = 103  # Another application disables input.
+            self.assertFalse(sample()['enabled'])
+            foreground[0] = 101
+            self.assertFalse(sample()['enabled'])  # Held Shift must be released.
+            pressed.clear()
+            self.assertFalse(sample()['enabled'])
+            pressed.update((0x10, ord('W')))
+            self.assertEqual(sample()['direction'], [1, 0, 0])
+
+            # Gamepad input follows the same focus and release rules.
+            mapper = InputMapper()
+            buttons, axes = [0] * 15, [0.] * 4
+            def gamepad_sample():
+                focused, keys = keyboard.read()
+                return mapper.sample(focused, keys, (0, axes, buttons))
+            self.assertFalse(gamepad_sample()['enabled'])
+            buttons[4], axes[1] = 1, -1.
+            self.assertGreater(gamepad_sample()['direction'][0], 0)
+            foreground[0] = 102
+            self.assertGreater(gamepad_sample()['direction'][0], 0)
+            foreground[0] = 103
+            self.assertFalse(gamepad_sample()['enabled'])
+            foreground[0] = 102
+            self.assertFalse(gamepad_sample()['enabled'])
+            buttons[4], axes[1] = 0, 0.
+            self.assertFalse(gamepad_sample()['enabled'])
+            buttons[4], axes[1] = 1, -1.
+            self.assertGreater(gamepad_sample()['direction'][0], 0)
 
     def test_gamepad_axis_recenter_mode_and_disconnect(self):
         sample = self.mapper.sample

@@ -11,7 +11,8 @@ import mujoco
 import numpy as np
 
 from arm_teleop.server import Simulation
-from scripts.native_viewer import copy_view_data, main, show_viewer, show_native_viewer
+from scripts.native_viewer import (copy_view_data, main, show_viewer, show_native_viewer,
+                                   prepare_auxiliary_view, sync_auxiliary_view)
 
 
 class NativeViewerTest(unittest.TestCase):
@@ -82,7 +83,8 @@ class NativeViewerTest(unittest.TestCase):
             self.assertTrue(kwargs['show_right_ui'])
             return Viewer()
 
-        with patch('scripts.native_viewer.NativeInput', Inputs), \
+        with patch('scripts.native_viewer.prepare_auxiliary_view', return_value=(None, None, None, None)), \
+             patch('scripts.native_viewer.NativeInput', Inputs), \
              patch('scripts.native_viewer.mujoco.viewer.launch_passive', launch), \
              patch('scripts.native_viewer.time.sleep'), \
              patch.object(sim, 'start', side_effect=AssertionError('unexpected physics thread')), \
@@ -92,6 +94,36 @@ class NativeViewerTest(unittest.TestCase):
         self.assertEqual(samples, [True, 'closed'])
         self.assertFalse(sim.thread.is_alive())
         self.assertAlmostEqual(original_data.qpos[0], .123, places=2)
+
+    def test_auxiliary_view_follows_live_state_without_writing_back(self):
+        sim = Simulation()
+        live_model, live_data = sim.backend.model, sim.backend.data
+
+        class Viewer:
+            def __init__(self, model):
+                self.user_scn = mujoco.MjvScene(model, maxgeom=50)
+                self.cam = mujoco.MjvCamera()
+                self.syncs = 0
+            def sync(self):
+                self.syncs += 1
+
+        def launch(model, data, **kwargs):
+            self.assertIsNot(model, live_model)
+            self.assertIsNot(data, live_data)
+            self.assertFalse(kwargs['show_left_ui'])
+            self.assertFalse(kwargs['show_right_ui'])
+            return Viewer(model)
+
+        with patch('scripts.native_viewer.mujoco.viewer.launch_passive', launch):
+            viewer, model, data, axes = prepare_auxiliary_view(sim)
+        live_data.qpos[0] += .2
+        mujoco.mj_forward(live_model, live_data)
+        sync_auxiliary_view(viewer, model, data, axes, sim)
+        np.testing.assert_allclose(data.qpos, live_data.qpos)
+        np.testing.assert_allclose(data.site_xpos, live_data.site_xpos)
+        self.assertEqual(viewer.syncs, 1)
+        data.qpos[0] += .5
+        self.assertNotEqual(data.qpos[0], live_data.qpos[0])
 
     def test_entry_starts_selected_robot_and_opens_browser(self):
         with socket.socket() as sock:

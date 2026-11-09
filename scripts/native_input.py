@@ -228,4 +228,5 @@ class NativeInput:
 
     def close(self):
         self.keyboard.close()
-        glfw.terminate()
+        # The MuJoCo viewer closes asynchronously and also owns GLFW. Its
+        # registered process-exit cleanup must run after its windows finish.

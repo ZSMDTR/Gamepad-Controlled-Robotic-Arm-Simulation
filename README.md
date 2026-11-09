@@ -10,7 +10,7 @@
 
 1. 从 [GitHub 项目页面](https://github.com/ZSMDTR/Gamepad-Controlled-Robotic-Arm-Simulation)选择 **Code → Download ZIP**，解压到英文路径，例如 Windows 的 `C:\arm-teleop` 或 Linux 的 `~/arm-teleop`；也可以使用 Git 克隆。
 2. Windows：双击项目目录中的 `start-mujoco-b601.cmd`。Linux：在项目目录的终端运行 `bash start-mujoco-b601.sh`。首次启动会创建独立 Python 环境、安装依赖并获取模型；后续使用相同命令启动。
-3. 名称包含 **B601-RS Refined Rotation** 的 MuJoCo 窗口会显示桌面与方块。点击窗口使其获得焦点，在窗口内直接控制：键盘按住 Shift，配合 W/S、A/D、Q/E 分别前后、左右、上下平移；I/K、J/L、U/O 分别绕世界 X、Y、Z 轴转动；Z/X 开合。手柄按住 LB 使能，左摇杆前后和左右对应前后和左右，右摇杆上下对应上下；同时按 RB 切换转动，A/B 控制夹爪。无需打开网页。标准左右侧栏可查看仿真，但执行器滑块会被控制器覆盖。
+3. 两个名称包含 **B601-RS Dual View** 的 MuJoCo 窗口以不同角度显示同一套机械臂与方块仿真；Windows 会尝试自动并排，Linux 可手动并排；关闭辅助视角不影响主窗口。点击窗口使其获得焦点，在窗口内直接控制：键盘按住 Shift，配合 W/S、A/D、Q/E 分别前后、左右、上下平移；I/K、J/L、U/O 分别绕世界 X、Y、Z 轴转动；Z/X 开合。手柄按住 LB 使能，左摇杆前后和左右对应前后和左右，右摇杆上下对应上下；同时按 RB 切换转动，A/B 控制夹爪。无需打开网页。标准左右侧栏可查看仿真，但执行器滑块会被控制器覆盖。
 
 原生窗口中红色 +X 指向桌面（前），绿色 +Y 指向机械臂自身的左，蓝色 +Z 向上。场景固定箭头和跟随末端的箭头都表示世界方向，末端箭头不随夹爪旋转；转动正方向按右手定则。手柄每次只取幅度最大的一个摇杆轴以减少串轴，切换平移与转动时，偏离的轴需要先回中。原生控制采用较慢的约束 DLS，指令速度可在 `optimized_algorithm/native_control.py` 中修改；实际运动受模型、接触和关节约束影响，不能保证完全无偏差。完整对应表见 [B601-RS 使用说明](B601-RS_使用说明.md)。
 
