@@ -11,3 +11,4 @@ dist/
 benchmark-results*.json
 .pytest_cache/
 robot_models/b601_rs/
+recordings/

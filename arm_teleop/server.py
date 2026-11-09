@@ -21,6 +21,7 @@ import numpy as np
 
 from .mujoco_backend import MujocoBackend, available_models
 from .pose_control import PoseController
+from .recorder import capture_state
 
 DT = 0.01
 INPUT_TIMEOUT = 0.25
@@ -50,6 +51,8 @@ class Simulation:
         self.lock = threading.Lock()
         self.native_hold_on_release = False
         self._native_previous_rotation = np.zeros(3)
+        self.recorder = None
+        self.recording_error = None
         self.stop_event = threading.Event()
         self.method = "dls"
         self.elbow_weight = .35
@@ -196,6 +199,13 @@ class Simulation:
             if start - deadline > INPUT_TIMEOUT:
                 self._reset_input()
                 active = False
+            recorded_before = None
+            if self.recorder is not None and self.recording_error is None:
+                try:
+                    recorded_before = capture_state(self)
+                except Exception as exc:
+                    self.recording_error = f'{type(exc).__name__}: {exc}'
+            r = None
             try:
                 if self.fault is None:
                     s = self.backend.state()
@@ -226,6 +236,25 @@ class Simulation:
                 # Stop issuing the old moving reference, then keep physics alive.
                 s = self.backend.state()
                 self.backend.command(s["q"], self.gripper_target)
+            if recorded_before is not None and self.recording_error is None:
+                try:
+                    action = {'direction': list(self.direction) if active else [0.] * 3,
+                              'rotation': list(self.rotation_input) if active else [0.] * 3,
+                              'gripper': self.gripper_input if active else 0,
+                              'enabled': bool(active),
+                              'requested_direction': list(self.direction),
+                              'requested_rotation': list(self.rotation_input),
+                              'requested_gripper': self.gripper_input,
+                              'input_stale': start - self.last_input > INPUT_TIMEOUT,
+                              'q_ref': None if r is None else r['q_ref'].copy(),
+                              'ctrl': self.backend.data.ctrl.copy(),
+                              'gripper_target': self.gripper_target,
+                              'constraints': [] if r is None else list(r['constraints']),
+                              'fault': self.fault}
+                    self.recorder.append(recorded_before, action, capture_state(self))
+                except Exception as exc:
+                    # Data collection must not interrupt mechanical control.
+                    self.recording_error = f'{type(exc).__name__}: {exc}'
             elapsed = (time.monotonic() - start) * 1000
             self.tick_ms.append(elapsed)
             self.tick_times.append(start)

@@ -16,10 +16,36 @@ import mujoco.viewer
 from arm_teleop.server import DT, Server, Simulation, physics_steps
 from arm_teleop.mujoco_backend import MujocoBackend, available_models
 from arm_teleop.b601_scene import make_b601_scene_profile
+from arm_teleop.recorder import EpisodeRecorder, recording_metadata
 from arm_teleop.world_axes import add_world_axes, update_tcp_axes
 from optimized_algorithm.native_control import make_native_controller
 from scripts.native_input import NativeInput, disabled
 from scripts.window_layout import arrange_viewers, viewer_windows
+
+RECORDING_DIR = Path(__file__).resolve().parent.parent / 'recordings'
+
+
+def finish_recording(simulation, outcome, reason):
+    """Close the current episode and report its actual on-disk outcome."""
+    recorder = simulation.recorder
+    if recorder is None:
+        return 'NOT RECORDING'
+    simulation.recorder = None
+    if recorder.steps == 0:
+        outcome, reason = 'interrupted', 'empty_episode'
+    try:
+        recorder.finish(outcome, reason)
+    except Exception as exc:
+        print(f'Recording incomplete: {recorder.path} ({type(exc).__name__}: {exc})', flush=True)
+        return 'ERROR - see terminal'
+    print(f'Episode saved ({outcome}, {recorder.steps} steps): {recorder.path}', flush=True)
+    label = {'success': 'OK', 'failure': 'FAIL', 'interrupted': 'INTERRUPTED'}[outcome]
+    return f'SAVED {label}: {recorder.steps}'
+
+
+def set_recording_text(viewer, name, status):
+    if viewer is not None and viewer.is_running() and hasattr(viewer, 'set_texts'):
+        viewer.set_texts((None, None, f'{name} | {status}', 'F8 start | F9 OK | F10 fail'))
 
 
 def copy_view_data(simulation, model, data):
@@ -89,22 +115,53 @@ def show_native_viewer(simulation):
                 viewer.cam.azimuth = 135
                 viewer.cam.elevation = -25
             axes = add_world_axes(viewer.user_scn)
-            if hasattr(viewer, 'set_texts'):
-                viewer.set_texts((None, None, 'MAIN VIEW - control', ''))
             main_windows = viewer_windows()
             auxiliary, aux_model, aux_data, aux_axes = prepare_auxiliary_view(simulation)
             arrange_viewers(main_windows, viewer_windows())
+            scene = 'b601_practice' if simulation.backend.name == 'b601_rs' else 'robot_only'
+            metadata = recording_metadata(simulation, scene, DT)
+            record_status = 'READY'
+            set_recording_text(viewer, 'MAIN VIEW', record_status)
+            set_recording_text(auxiliary, 'AUX VIEW', record_status)
             print('Two MuJoCo windows show the same simulation. Close the auxiliary view independently.', flush=True)
             print('Focus MuJoCo. Shift + W/S: forward/back; A/D: left/right; Q/E: up/down.', flush=True)
             print('Shift + I/K, J/L, U/O: rotate about world X/Y/Z; Z/X: gripper.', flush=True)
             print('Gamepad: hold LB, move one stick axis; hold RB for rotation; A/B: gripper.', flush=True)
+            print(f'F8 start recording; F9 save success; F10 save failure. Data: {RECORDING_DIR}', flush=True)
             try:
                 deadline = time.monotonic()
                 next_sync = deadline
+                last_status_update = deadline
                 while viewer.is_running():
-                    simulation.set_input(inputs.poll())
+                    sample = inputs.poll()
+                    for command in inputs.pop_commands():
+                        if command == 'start' and simulation.recorder is None:
+                            try:
+                                simulation.recorder = EpisodeRecorder(RECORDING_DIR, metadata)
+                                simulation.recording_error = None
+                                record_status = 'REC'
+                                print(f'Recording: {simulation.recorder.path}', flush=True)
+                            except Exception as exc:
+                                record_status = 'ERROR - see terminal'
+                                print(f'Cannot start recording: {type(exc).__name__}: {exc}', flush=True)
+                        elif command in ('success', 'failure'):
+                            record_status = finish_recording(simulation, command, 'user_label')
+                        set_recording_text(viewer, 'MAIN VIEW', record_status)
+                        set_recording_text(auxiliary, 'AUX VIEW', record_status)
+                    simulation.set_input(sample)
                     start = time.monotonic()
                     simulation.tick(start, deadline)
+                    if simulation.recorder is not None and simulation.recording_error:
+                        print(f'Recording stopped: {simulation.recording_error}', flush=True)
+                        finish_recording(simulation, 'interrupted', 'recording_error')
+                        record_status = 'ERROR - see terminal'
+                        set_recording_text(viewer, 'MAIN VIEW', record_status)
+                        set_recording_text(auxiliary, 'AUX VIEW', record_status)
+                    if simulation.recorder is not None and start - last_status_update >= .5:
+                        record_status = f'REC {simulation.recorder.steps}'
+                        set_recording_text(viewer, 'MAIN VIEW', record_status)
+                        set_recording_text(auxiliary, 'AUX VIEW', record_status)
+                        last_status_update = start
                     if start >= next_sync:
                         update_tcp_axes(viewer.user_scn, axes,
                                         simulation.backend.data.site_xpos[simulation.backend.tcp_id])
@@ -121,6 +178,8 @@ def show_native_viewer(simulation):
                         deadline = now
                     time.sleep(max(0, deadline - time.monotonic()))
             finally:
+                if simulation.recorder is not None:
+                    finish_recording(simulation, 'interrupted', 'viewer_closed')
                 if auxiliary is not None:
                     auxiliary.close()
                 simulation.set_input(disabled())

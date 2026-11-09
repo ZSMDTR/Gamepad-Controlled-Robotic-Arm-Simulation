@@ -63,6 +63,7 @@ class NativeViewerTest(unittest.TestCase):
             def poll(self):
                 samples.append(True)
                 return {'direction': [0., 0., 0.], 'enabled': False}
+            def pop_commands(self): return []
             def close(self):
                 samples.append('closed')
 

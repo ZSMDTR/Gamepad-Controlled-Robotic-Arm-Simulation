@@ -34,6 +34,31 @@ def primary_axis(values):
     return [value if i == index else 0. for i, value in enumerate(values)]
 
 
+class RecordCommands:
+    """Emit one recording command per press while a viewer has focus."""
+    COMMANDS = (('F8', 'start'), ('F9', 'success'), ('F10', 'failure'))
+
+    def __init__(self):
+        self.focused = False
+        self.previous = set()
+
+    def sample(self, focused, keys):
+        down = {key for key, _ in self.COMMANDS if key in keys}
+        if not focused:
+            self.focused = False
+            self.previous = set()
+            return []
+        # Keys held while a viewer gains focus cannot trigger an action.
+        if not self.focused:
+            self.focused = True
+            self.previous = down
+            return []
+        commands = [command for key, command in self.COMMANDS
+                    if key in down and key not in self.previous]
+        self.previous = down
+        return commands
+
+
 class InputMapper:
     """Fail-closed focus/deadman state and browser-compatible gamepad mapping."""
     def __init__(self):
@@ -122,6 +147,8 @@ class WindowsKeyboard:
         if not hwnd or pid.value != os.getpid():
             return False, set()
         keys = {key for key in 'WASDQEIKLJOUZX' if self.user.GetAsyncKeyState(ord(key)) & 0x8000}
+        keys.update(name for name, code in (('F8', 0x77), ('F9', 0x78), ('F10', 0x79))
+                    if self.user.GetAsyncKeyState(code) & 0x8000)
         if self.user.GetAsyncKeyState(0x10) & 0x8000:
             keys.add('SHIFT')
         return True, keys
@@ -191,6 +218,8 @@ class X11Keyboard:
             code = self.x.XKeysymToKeycode(self.display, keysym)
             return bool(code and keymap.raw[code // 8] & (1 << (code % 8)))
         keys = {key for key in 'WASDQEIKLJOUZX' if down(ord(key.lower()))}
+        keys.update(name for name, keysym in (('F8', 0xffc5), ('F9', 0xffc6), ('F10', 0xffc7))
+                    if down(keysym))
         if down(0xffe1) or down(0xffe2):
             keys.add('SHIFT')
         return True, keys
@@ -212,11 +241,16 @@ class NativeInput:
             self.keyboard.close()
             raise RuntimeError('GLFW gamepad initialization failed')
         self.mapper = InputMapper()
+        self.record_commands = RecordCommands()
+        self._commands = []
 
     def poll(self):
         # Process joystick hot-plug notifications on the initializing thread.
         glfw.poll_events()
         focused, keys = self.keyboard.read()
+        if not focused:
+            self._commands.clear()
+        self._commands.extend(self.record_commands.sample(focused, keys))
         pad = None
         for joystick in range(glfw.JOYSTICK_1, glfw.JOYSTICK_LAST + 1):
             if glfw.joystick_present(joystick) and glfw.joystick_is_gamepad(joystick):
@@ -225,6 +259,11 @@ class NativeInput:
                     pad = (joystick, state.axes, state.buttons)
                     break
         return self.mapper.sample(focused, keys, pad)
+
+    def pop_commands(self):
+        """Return and clear commands; call from the same thread as poll()."""
+        commands, self._commands = self._commands, []
+        return commands
 
     def close(self):
         self.keyboard.close()

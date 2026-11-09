@@ -3,12 +3,56 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scripts.native_input import InputMapper, WindowsKeyboard
+from scripts.native_input import InputMapper, NativeInput, RecordCommands, WindowsKeyboard
 
 
 class NativeInputTest(unittest.TestCase):
     def setUp(self):
         self.mapper = InputMapper()
+
+    def test_record_keys_are_single_press_and_rearm_after_focus(self):
+        commands = RecordCommands()
+        self.assertEqual(commands.sample(True, set()), [])
+        self.assertEqual(commands.sample(True, {'F8'}), ['start'])
+        self.assertEqual(commands.sample(True, {'F8'}), [])
+        self.assertEqual(commands.sample(False, {'F8'}), [])
+        self.assertEqual(commands.sample(True, {'F8'}), [])
+        self.assertEqual(commands.sample(True, set()), [])
+        self.assertEqual(commands.sample(True, {'F8'}), ['start'])
+        self.assertEqual(commands.sample(True, {'F9'}), ['success'])
+        self.assertEqual(commands.sample(True, {'F10'}), ['failure'])
+
+    def test_windows_reads_record_keys_while_focused(self):
+        user = MagicMock()
+        user.GetForegroundWindow.return_value = 101
+        user.GetWindowThreadProcessId.side_effect = lambda _, process: setattr(
+            ctypes.cast(process, ctypes.POINTER(ctypes.c_ulong)).contents, 'value', os.getpid())
+        user.GetAsyncKeyState.side_effect = lambda key: 0x8000 if key in (0x77, 0x78, 0x79) else 0
+        with patch.object(ctypes, 'WinDLL', return_value=user, create=True):
+            focused, keys = WindowsKeyboard().read()
+        self.assertTrue(focused)
+        self.assertTrue({'F8', 'F9', 'F10'}.issubset(keys))
+
+    def test_poll_exposes_record_commands_and_drops_them_on_focus_loss(self):
+        inputs = NativeInput.__new__(NativeInput)
+        inputs.keyboard = MagicMock()
+        inputs.mapper = InputMapper()
+        inputs.record_commands = RecordCommands()
+        inputs._commands = []
+        samples = iter([(True, set()), (True, {'F8'}), (True, {'F8'}),
+                        (True, set()), (True, {'F9'}), (False, set())])
+        inputs.keyboard.read.side_effect = lambda: next(samples)
+        with patch('scripts.native_input.glfw.poll_events'), \
+             patch('scripts.native_input.glfw.joystick_present', return_value=False):
+            inputs.poll()
+            inputs.poll()
+            self.assertEqual(inputs.pop_commands(), ['start'])
+            inputs.poll()
+            self.assertEqual(inputs.pop_commands(), [])
+            inputs.poll()
+            inputs.poll()
+            inputs.poll()  # Focus loss clears an unconsumed event.
+            self.assertEqual(inputs.pop_commands(), [])
 
     def test_keyboard_requires_release_after_start_and_focus_loss(self):
         sample = self.mapper.sample
